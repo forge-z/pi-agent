@@ -1,0 +1,34 @@
+name: Verify MVP
+on:
+  push:
+  pull_request:
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+      - run: npm run lint
+      - run: npm run build
+      - run: npm test
+      - name: Build container
+        run: docker build -t pi-agent:test .
+      - name: Verify non-root, persistent data and health
+        run: |
+          mkdir -p /tmp/pi-agent-ci
+          printf 'ci-test-password-only' > /tmp/pi-agent-ci/web-password
+          export APP_ORIGIN=http://localhost:3000 COOKIE_SECURE=false WEB_PASSWORD_SECRET_FILE=/tmp/pi-agent-ci/web-password
+          docker compose config --quiet
+          docker compose up -d --build --wait --wait-timeout 90
+          test "$(docker compose exec -T pi-agent id -u)" = "1000"
+          docker compose exec -T pi-agent node -e "fetch('http://127.0.0.1:3000/healthz').then(r=>process.exit(r.ok?0:1))"
+          docker compose exec -T pi-agent node -e "require('node:fs').writeFileSync('/app/data/ci-marker','persisted')"
+          docker compose down
+          docker compose up -d --wait --wait-timeout 90
+          docker compose exec -T pi-agent node -e "if(require('node:fs').readFileSync('/app/data/ci-marker','utf8')!=='persisted') process.exit(1)"
+          docker compose down -v

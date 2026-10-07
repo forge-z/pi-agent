@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="theme-color" content="#18181b" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" href="/icon.svg" />
+    <link rel="stylesheet" href="/style.css" />
+    <title>Pi · Assistente pessoal</title>
+    <script type="module" src="/app.js"></script>
+  </head>
+  <body>
+    <section id="login" class="login">
+      <div class="login-card">
+        <span class="wordmark">pi<span class="dot">.</span></span>
+        <p class="eyebrow">SEU ASSISTENTE PESSOAL</p>
+        <h1>Uma conversa.<br />Onde você estiver.</h1>
+        <p class="muted">
+          Continue pela web ou pelo Telegram. Seu histórico e suas decisões
+          ficam juntos.
+        </p>
+        <form id="login-form">
+          <label for="password">Senha da interface</label
+          ><input
+            id="password"
+            type="password"
+            autocomplete="current-password"
+            required
+            minlength="12"
+          /><button type="submit">
+            Entrar no workspace <span aria-hidden="true">→</span>
+          </button>
+        </form>
+        <p id="login-error" class="error" role="alert"></p>
+        <p class="fine">
+          O login desta interface é separado da sua conta ChatGPT.
+        </p>
+      </div>
+    </section>
+    <div id="workspace" class="workspace" hidden>
+      <aside>
+        <div class="brand">
+          <span class="wordmark">pi<span class="dot">.</span></span
+          ><span class="tag">pessoal</span>
+        </div>
+        <button id="new-conversation" class="new">+ Nova conversa</button>
+        <p class="eyebrow">CONVERSAS</p>
+        <nav id="conversations" aria-label="Conversas"></nav>
+        <div class="sidebar-bottom">
+          <button id="provider-button" class="subtle">
+            Sign in with ChatGPT
+          </button>
+          <p id="provider-status" class="fine"></p>
+          <button id="logout" class="subtle">Sair</button>
+        </div>
+      </aside>
+      <main>
+        <header>
+          <div>
+            <p class="eyebrow">WORKSPACE</p>
+            <h1 id="conversation-title">Seu espaço de conversa</h1>
+          </div>
+          <div class="header-actions">
+            <span id="connection" class="tag" role="status">Conectando</span
+            ><button id="link-button" class="subtle">Vincular Telegram</button>
+          </div>
+        </header>
+        <div id="banner" class="banner" role="status"></div>
+        <div id="error" class="error notice" role="alert"></div>
+        <div class="conversation-body">
+          <section
+            id="messages"
+            class="messages"
+            aria-label="Histórico de mensagens"
+          >
+            <div class="welcome">
+              <span class="eyebrow">CONTINUIDADE, COM CONTROLE</span>
+              <h2>O que vamos resolver hoje?</h2>
+              <p>
+                Comece uma conversa. Antes de agir em serviços externos, Pi pede
+                sua confirmação.
+              </p>
+            </div>
+          </section>
+          <section
+            id="actions"
+            class="actions"
+            aria-label="Ações e aprovações"
+          ></section>
+          <section
+            id="deliveries"
+            class="deliveries"
+            aria-label="Entregas Telegram"
+          ></section>
+        </div>
+        <footer>
+          <form id="message-form">
+            <label for="message" class="sr-only">Sua mensagem</label
+            ><textarea
+              id="message"
+              rows="2"
+              placeholder="Escreva sua mensagem…"
+              required
+              maxlength="32000"
+            ></textarea
+            ><button id="send" type="submit">
+              Enviar <span aria-hidden="true">↑</span>
+            </button>
+          </form>
+          <div class="composer-meta">
+            <span id="run-status">Histórico salvo no servidor</span
+            ><span>Leitura primeiro. Você decide as ações.</span>
+          </div>
+        </footer>
+      </main>
+    </div>
+    <dialog id="link-dialog">
+      <form method="dialog">
+        <button class="dialog-close" aria-label="Fechar">×</button>
+      </form>
+      <p class="eyebrow">A MESMA CONVERSA</p>
+      <h2>Continue no Telegram</h2>
+      <p>
+        Envie ao seu bot este comando, usando um usuário e chat permitidos na
+        configuração:
+      </p>
+      <code id="link-code"></code><button id="copy-link">Copiar comando</button>
+      <p class="fine">Código de uso único, válido por 10 minutos.</p>
+    </dialog>
+    <dialog id="provider-dialog">
+      <p class="eyebrow">PROVIDER OPENAI</p>
+      <h2>Sign in with ChatGPT</h2>
+      <p id="auth-state" role="status">Preparando login…</p>
+      <div id="auth-events"></div>
+      <form id="auth-form" hidden>
+        <label id="auth-label" for="auth-value"></label
+        ><input id="auth-value" autocomplete="off" required /><button
+          type="submit"
+        >
+          Continuar
+        </button>
+      </form>
+      <button id="cancel-auth" class="subtle">Fechar / cancelar</button>
+    </dialog>
+  </body>
+</html>

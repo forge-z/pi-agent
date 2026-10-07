@@ -1,0 +1,14 @@
+.git
+.env
+.env.*
+node_modules
+dist
+coverage
+*.log
+data
+secrets
+config/mcp.json
+*.sqlite
+*.sqlite-*
+
+docs/evidence

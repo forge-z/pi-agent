@@ -1,0 +1,9 @@
+[
+  {
+    "name": "calendar",
+    "url": "https://mcp.example.net/mcp",
+    "readTools": ["list_events"],
+    "actionTools": ["create_event"],
+    "tokenFile": "/run/secrets/calendar_mcp_token"
+  }
+]
