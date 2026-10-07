@@ -23,6 +23,8 @@ O Compose mantém as bases SQLite e as credenciais do provider dentro de app.sql
 
 ## Proxy e origem
 
+Se os logs mostrarem `ERR_INVALID_URL` com o texto `Defina APP_ORIGIN como a origem HTTPS publica`, substitua o valor de `APP_ORIGIN` nas variáveis do Coolify pela URL pública real, por exemplo `https://pi.example.com`, sem barra final. Salve e refaça o deploy. Recarregar o Compose preserva valores existentes no Coolify, portanto a troca precisa ser feita na variável já cadastrada.
+
 O contêiner escuta na porta `3000` apenas na rede Compose; encaminhe o domínio pelo proxy do Coolify ou por um proxy reverso que termine TLS. Defina `APP_ORIGIN` para a origem HTTPS que o usuário abre no navegador. Configure o proxy para preservar `Host` e `X-Forwarded-Proto`, encaminhar `text/event-stream` sem buffering nem compressão e permitir conexões SSE longas (timeout de leitura de pelo menos 10 minutos). Não exponha uma porta de host diretamente à internet.
 
 ## OpenAI, Telegram e MCP

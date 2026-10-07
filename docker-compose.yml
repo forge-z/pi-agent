@@ -12,7 +12,8 @@ services:
       DATA_DIR: /app/data
       APP_MODE: ${APP_MODE:-demo}
       MODEL_ID: ${MODEL_ID:-gpt-6.1-sol}
-      APP_ORIGIN: ${APP_ORIGIN:?Defina APP_ORIGIN como a origem HTTPS publica}
+      # Defina a origem HTTPS pública nas variáveis do Coolify, sem caminho/barra final.
+      APP_ORIGIN: ${APP_ORIGIN:?}
       COOKIE_SECURE: ${COOKIE_SECURE:-true}
       # Senha de runtime: o build não precisa dela. A aplicação recusa senha vazia/curta.
       WEB_PASSWORD: ${WEB_PASSWORD:-}
