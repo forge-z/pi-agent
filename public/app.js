@@ -423,9 +423,258 @@ function render(snapshot) {
     }
     return card;
   });
-  const encodedActions = JSON.stringify(snapshot.actions);
+  const nativeInteractions = (snapshot.mcpInteractions || []).filter(
+    (i) => i.state === "pending",
+  );
+  for (const interaction of nativeInteractions) {
+    const interactionConversation = conversationId;
+    const payload = JSON.parse(interaction.payload);
+    const card = node("article", undefined, "action-card");
+    const heading = node("div", undefined, "action-heading");
+    heading.append(
+      icon("shield-check"),
+      node("strong", `Solicitação de ${interaction.server}`),
+    );
+    card.append(
+      heading,
+      node(
+        "p",
+        payload.message ||
+          payload.interaction?.message ||
+          "O servidor MCP aguarda sua decisão.",
+        "action-note",
+      ),
+    );
+    const detail = node("details");
+    detail.append(
+      node("summary", "Detalhes enviados pelo servidor"),
+      node("pre", JSON.stringify(payload, null, 2)),
+    );
+    card.append(detail);
+    if (interaction.kind === "url") {
+      try {
+        const url = new URL(payload.url);
+        if (url.protocol === "https:" && !url.username && !url.password) {
+          const link = node("a", "Abrir solicitação no serviço");
+          link.href = url.href;
+          link.target = "_blank";
+          link.rel = "noopener noreferrer";
+          card.append(link);
+        }
+      } catch {
+        /* display details without an unsafe link */
+      }
+    }
+    const form = node("form", undefined, "management-form");
+    const inputs = [];
+    const schema = payload.requestedSchema;
+    if (interaction.kind === "form" && schema?.properties) {
+      for (const [name, property] of Object.entries(schema.properties)) {
+        const field = node("div", undefined, "form-field");
+        const label = node("label", property.title || name);
+        let input;
+        if (Array.isArray(property.enum)) {
+          input = node("select");
+          for (const value of property.enum) {
+            const option = node("option", String(value));
+            option.value = JSON.stringify(value);
+            input.append(option);
+          }
+        } else {
+          input = node("input");
+          input.type =
+            property.type === "boolean"
+              ? "checkbox"
+              : ["number", "integer"].includes(property.type)
+                ? "number"
+                : "text";
+          if (property.type === "integer") input.step = "1";
+          if (property.default !== undefined) {
+            if (input.type === "checkbox") input.checked = property.default;
+            else
+              input.value = ["array", "object"].includes(property.type)
+                ? JSON.stringify(property.default)
+                : String(property.default);
+          }
+          if (schema.required?.includes(name) && input.type !== "checkbox")
+            input.required = true;
+        }
+        input.id = `mcp-${interaction.id}-${name}`;
+        label.htmlFor = input.id;
+        field.append(label, input);
+        if (property.description)
+          field.append(node("small", property.description));
+        form.append(field);
+        inputs.push({ name, property, input });
+      }
+    }
+    let customContent;
+    if (interaction.kind === "resume") {
+      const field = node("div", undefined, "form-field");
+      const label = node(
+        "label",
+        "Resposta ao formulário, se solicitada (JSON)",
+      );
+      customContent = node("textarea");
+      customContent.rows = 3;
+      customContent.value = "{}";
+      customContent.id = `mcp-content-${interaction.id}`;
+      label.htmlFor = customContent.id;
+      field.append(label, customContent);
+      form.append(field);
+    }
+    const error = node("p", undefined, "error");
+    error.setAttribute("role", "alert");
+    const controls = node("div", undefined, "action-buttons");
+    const accept = node("button", "Aceitar");
+    accept.type = "submit";
+    const decide = async (action) => {
+      let content;
+      if (action === "accept") {
+        if (inputs.length) {
+          content = {};
+          for (const { name, property, input } of inputs) {
+            if (input.type === "checkbox") content[name] = input.checked;
+            else if (input.value !== "")
+              content[name] = Array.isArray(property.enum)
+                ? JSON.parse(input.value)
+                : ["number", "integer"].includes(property.type)
+                  ? Number(input.value)
+                  : ["array", "object"].includes(property.type)
+                    ? JSON.parse(input.value)
+                    : input.value;
+          }
+        }
+        if (customContent) content = JSON.parse(customContent.value || "{}");
+      }
+      error.textContent = "";
+      controls
+        .querySelectorAll("button")
+        .forEach((button) => (button.disabled = true));
+      try {
+        await api(
+          `/api/conversations/${interactionConversation}/mcp-interactions/${interaction.id}`,
+          "POST",
+          { action, ...(content ? { content } : {}) },
+        );
+        const updated = await api(
+          `/api/conversations/${interactionConversation}`,
+        );
+        if (conversationId === interactionConversation) render(updated);
+      } catch (failure) {
+        error.textContent = failure.message;
+      } finally {
+        controls
+          .querySelectorAll("button")
+          .forEach((button) => (button.disabled = false));
+      }
+    };
+    form.onsubmit = (event) => {
+      event.preventDefault();
+      void decide("accept").catch(
+        (failure) => (error.textContent = failure.message),
+      );
+    };
+    controls.append(accept);
+    for (const [action, title] of [
+      ["decline", "Recusar"],
+      ["cancel", "Cancelar"],
+    ]) {
+      const button = node("button", title);
+      button.type = "button";
+      button.className = "subtle";
+      button.onclick = () => {
+        void decide(action).catch(
+          (failure) => (error.textContent = failure.message),
+        );
+      };
+      controls.append(button);
+    }
+    form.append(error, controls);
+    card.append(form);
+    cards.push(card);
+  }
+  const uncertainCalls = (snapshot.mcpCalls || []).filter(
+    (call) => call.state === "uncertain",
+  );
+  for (const call of uncertainCalls) {
+    const callConversation = conversationId;
+    const card = node("article", undefined, "action-card");
+    card.append(
+      node("strong", `${call.server} / ${call.tool}`),
+      node(
+        "p",
+        "Resultado incerto. A chamada não foi reenviada. Verifique no serviço e registre o resultado.",
+      ),
+    );
+    const form = node("form", undefined, "management-form");
+    const input = node("input");
+    input.required = true;
+    input.id = `reconcile-${call.id}`;
+    const label = node("label", "Resultado verificado");
+    label.htmlFor = input.id;
+    const button = node("button", "Registrar resultado");
+    button.type = "submit";
+    const error = node("p", undefined, "error");
+    form.append(label, input, button, error);
+    form.onsubmit = (event) => {
+      event.preventDefault();
+      button.disabled = true;
+      void api(
+        `/api/conversations/${callConversation}/mcp-calls/${call.id}/reconcile`,
+        "POST",
+        { note: input.value },
+      )
+        .then(() => api(`/api/conversations/${callConversation}`))
+        .then((updated) => {
+          if (conversationId === callConversation) render(updated);
+        })
+        .catch((failure) => (error.textContent = failure.message))
+        .finally(() => (button.disabled = false));
+    };
+    card.append(form);
+    cards.push(card);
+  }
+  const encodedActions = JSON.stringify([
+    snapshot.actions,
+    nativeInteractions,
+    uncertainCalls,
+  ]);
   if (encodedActions !== renderedActions) {
+    const drafts = new Map(
+      [...$("actions").querySelectorAll("input, textarea, select")]
+        .filter((input) => input.id)
+        .map((input) => [
+          input.id,
+          {
+            value: input.value,
+            checked: input.checked,
+            start: input.selectionStart,
+            end: input.selectionEnd,
+          },
+        ]),
+    );
+    const focused = document.activeElement?.id;
     $("actions").replaceChildren(...cards);
+    for (const [id, draft] of drafts) {
+      const input = document.getElementById(id);
+      if (!input || !$("actions").contains(input)) continue;
+      input.value = draft.value;
+      if (input.type === "checkbox") input.checked = draft.checked;
+      if (id === focused) {
+        input.focus();
+        if (
+          typeof input.setSelectionRange === "function" &&
+          draft.start !== null
+        ) {
+          try {
+            input.setSelectionRange(draft.start, draft.end);
+          } catch {
+            /* select/number fields */
+          }
+        }
+      }
+    }
     renderedActions = encodedActions;
   }
   $("deliveries").replaceChildren(

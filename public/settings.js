@@ -21,6 +21,13 @@ const config = (server) => ({
   url: server.url,
   readTools: [...(server.readTools || [])],
   actionTools: [...(server.actionTools || [])],
+  ...(server.mode ? { mode: server.mode } : {}),
+  ...(Array.isArray(server.allowedTools)
+    ? { allowedTools: [...server.allowedTools] }
+    : {}),
+  ...(Array.isArray(server.deniedTools)
+    ? { deniedTools: [...server.deniedTools] }
+    : {}),
   ...(server.tokenFile ? { tokenFile: server.tokenFile } : {}),
 });
 
@@ -66,7 +73,13 @@ export function configureUI(api, callbacks) {
   let settings = null;
   let currentSettings = null;
   let servers = [];
+  let mcpStatus = [];
   let editingName = null;
+  let originalMode;
+  let editorMode = "direct";
+  let allowedTools;
+  let deniedTools = [];
+  let deniedToolsPresent = false;
   let conversationTarget = null;
   let tools = [];
   let requestGeneration = 0;
@@ -149,6 +162,7 @@ export function configureUI(api, callbacks) {
   async function loadSettings() {
     settings = await api("/api/settings");
     servers = settings.mcp || (await api("/api/mcp"));
+    mcpStatus = settings.mcpStatus || [];
     updateLabel();
   }
   function show(dialogId) {
@@ -263,7 +277,9 @@ export function configureUI(api, callbacks) {
     mutationInFlight = true;
     try {
       await api("/api/mcp", "PUT", { servers: next });
-      servers = await api("/api/mcp");
+      settings = await api("/api/settings");
+      servers = settings.mcp || (await api("/api/mcp"));
+      mcpStatus = settings.mcpStatus || [];
       renderServers();
     } finally {
       mutationInFlight = false;
@@ -271,6 +287,8 @@ export function configureUI(api, callbacks) {
   }
   function renderServers() {
     const cards = servers.map((server) => {
+      const mode = server.mode === "direct" ? "direct" : "legacy";
+      const status = mcpStatus.find((entry) => entry.server === server.name);
       const card = node("article", undefined, "management-card");
       const heading = node("div", undefined, "management-card-heading");
       const title = node("div");
@@ -283,10 +301,19 @@ export function configureUI(api, callbacks) {
         heading,
         node(
           "p",
-          `${server.readTools.length} leituras · ${server.actionTools.length} ações · ${server.tokenFile ? "Token em arquivo" : server.hasToken ? "Token salvo" : "Sem token"}`,
+          `${mode === "direct" ? "Integração automática" : "Modo de compatibilidade"} · ${mode === "legacy" ? `${server.readTools.length} leituras · ${server.actionTools.length} ações · ` : ""}${server.tokenFile ? "Token em arquivo" : server.hasToken ? "Token salvo" : "Sem token"}`,
           "card-meta",
         ),
       );
+      if (Array.isArray(status?.tools))
+        card.append(
+          node(
+            "p",
+            `${status.tools.length} ferramentas registradas`,
+            "card-meta",
+          ),
+        );
+      if (status?.error) card.append(node("p", status.error, "error"));
       const actions = node("div", undefined, "card-buttons");
       actions.append(
         button("Editar", () => editServer(server)),
@@ -326,11 +353,48 @@ export function configureUI(api, callbacks) {
     $("mcp-token").disabled = false;
     tools = [];
     editingName = null;
+    originalMode = undefined;
+    editorMode = "direct";
+    allowedTools = undefined;
+    deniedTools = [];
+    deniedToolsPresent = false;
     $("mcp-add").hidden = false;
+  }
+  function updateModePresentation() {
+    const direct = editorMode === "direct";
+    const canMigrate = Boolean(editingName) && originalMode !== "direct";
+    $("mcp-legacy-mode").hidden = !canMigrate;
+    $("mcp-use-direct").checked = direct;
+    $("mcp-legacy-notice").textContent = direct
+      ? "Ao salvar, as ferramentas existentes passam a ser chamadas diretamente pelo Pi, mantendo a lista permitida atual."
+      : "Modo de compatibilidade. As listas de leitura e ação abaixo mantêm as permissões atuais.";
+    $("mcp-direct-mode").hidden = !direct;
+    $("mcp-direct-notice").textContent =
+      `Ferramentas permitidas são chamadas diretamente pelo Pi. ${allowedTools === undefined ? "Todas ficam disponíveis por padrão; desmarque uma para bloqueá-la." : "Somente ferramentas na lista permitida ficam disponíveis; marque ou desmarque as ferramentas abaixo."}`;
+    $("mcp-legacy-permissions").hidden = direct || !editingName;
+    $("mcp-legacy-permissions").open = !direct && Boolean(editingName);
   }
   function editServer(server = null) {
     closeEditor();
     editingName = server?.name || null;
+    originalMode = server?.mode;
+    editorMode =
+      server?.mode === "direct" ? "direct" : server ? "legacy" : "direct";
+    allowedTools =
+      server?.mode === "direct"
+        ? Array.isArray(server.allowedTools)
+          ? [...server.allowedTools]
+          : undefined
+        : server
+          ? [
+              ...new Set([
+                ...(server.readTools || []),
+                ...(server.actionTools || []),
+              ]),
+            ]
+          : undefined;
+    deniedTools = [...(server?.deniedTools || [])];
+    deniedToolsPresent = Array.isArray(server?.deniedTools);
     $("mcp-editor-title").textContent = server
       ? `Editar ${server.name}`
       : "Novo servidor";
@@ -340,8 +404,8 @@ export function configureUI(api, callbacks) {
     $("mcp-token-file").value = server?.tokenFile || "";
     $("mcp-token-file-details").hidden = !server?.tokenFile;
     $("mcp-token").disabled = Boolean(server?.tokenFile);
-    $("mcp-read-tools").value = server?.readTools.join("\n") || "";
-    $("mcp-action-tools").value = server?.actionTools.join("\n") || "";
+    $("mcp-read-tools").value = server?.readTools?.join("\n") || "";
+    $("mcp-action-tools").value = server?.actionTools?.join("\n") || "";
     $("mcp-remove-token-row").hidden =
       !server?.hasToken || Boolean(server?.tokenFile);
     $("mcp-token-hint").textContent = server?.tokenFile
@@ -350,6 +414,7 @@ export function configureUI(api, callbacks) {
         ? "Um token já está salvo. Deixe vazio para preservá-lo; preencha para substituí-lo."
         : "Opcional. O token salvo nunca é exibido aqui.";
     tools = discovered.get(editingName) || [];
+    updateModePresentation();
     feedback("mcp-editor-error");
     feedback("mcp-editor-feedback");
     $("mcp-form").hidden = false;
@@ -363,6 +428,11 @@ export function configureUI(api, callbacks) {
     $("mcp-token").disabled = $("mcp-remove-token").checked;
     if ($("mcp-remove-token").checked) $("mcp-token").value = "";
   };
+  $("mcp-use-direct").onchange = () => {
+    editorMode = $("mcp-use-direct").checked ? "direct" : "legacy";
+    updateModePresentation();
+    renderTools();
+  };
   function readEditor() {
     const name = $("mcp-name").value.trim();
     const url = $("mcp-url").value.trim();
@@ -373,18 +443,25 @@ export function configureUI(api, callbacks) {
         "Use apenas letras sem acento, números, hífen ou sublinhado no nome.",
       );
     const parsed = new URL(url);
+    const localHttp =
+      parsed.protocol === "http:" &&
+      ["localhost", "127.0.0.1", "[::1]"].includes(parsed.hostname);
     if (
-      parsed.protocol !== "https:" ||
+      (parsed.protocol !== "https:" && !localHttp) ||
       parsed.username ||
       parsed.password ||
+      parsed.search ||
       parsed.hash
     )
       throw new Error(
-        "Use um endpoint HTTPS sem credenciais na URL ou fragmento.",
+        "Use HTTPS (HTTP somente em loopback), sem credenciais, query ou fragmento na URL.",
       );
     const readTools = names($("mcp-read-tools").value);
     const actionTools = names($("mcp-action-tools").value);
-    if (readTools.some((tool) => actionTools.includes(tool)))
+    if (
+      editorMode === "legacy" &&
+      readTools.some((tool) => actionTools.includes(tool))
+    )
       throw new Error(
         "Uma ferramenta deve ser leitura ou ação. Remova os nomes repetidos entre as listas.",
       );
@@ -396,6 +473,7 @@ export function configureUI(api, callbacks) {
       throw new Error(
         "Já existe um servidor com esse nome. Escolha outro nome.",
       );
+    const existing = servers.find((server) => server.name === editingName);
     const tokenFile = $("mcp-token-file").value.trim();
     if (tokenFile && $("mcp-token").value)
       throw new Error(
@@ -406,6 +484,26 @@ export function configureUI(api, callbacks) {
       url,
       readTools,
       actionTools,
+      ...(editorMode === "direct"
+        ? {
+            mode: "direct",
+            ...(existing && existing.mode !== "direct"
+              ? { migrateLegacy: true }
+              : {}),
+            ...(allowedTools === undefined
+              ? {}
+              : { allowedTools: [...allowedTools] }),
+            ...(deniedToolsPresent ? { deniedTools: [...deniedTools] } : {}),
+          }
+        : {
+            ...(originalMode ? { mode: originalMode } : {}),
+            ...(Array.isArray(existing?.allowedTools)
+              ? { allowedTools: [...existing.allowedTools] }
+              : {}),
+            ...(Array.isArray(existing?.deniedTools)
+              ? { deniedTools: [...existing.deniedTools] }
+              : {}),
+          }),
       ...(tokenFile ? { tokenFile } : {}),
       ...($("mcp-remove-token").checked
         ? { token: "" }
@@ -432,6 +530,14 @@ export function configureUI(api, callbacks) {
         ]);
         if (generation !== requestGeneration) return;
         editingName = next.name;
+        originalMode = next.mode;
+        editorMode = next.mode === "direct" ? "direct" : "legacy";
+        allowedTools = Array.isArray(next.allowedTools)
+          ? [...next.allowedTools]
+          : undefined;
+        deniedTools = [...(next.deniedTools || [])];
+        deniedToolsPresent = Array.isArray(next.deniedTools);
+        updateModePresentation();
         $("mcp-name").readOnly = true;
         $("mcp-token").value = "";
         $("mcp-remove-token").checked = false;
@@ -442,13 +548,42 @@ export function configureUI(api, callbacks) {
         $("mcp-token-hint").textContent =
           "Deixe vazio para preservar o token salvo. Ele nunca é exibido aqui.";
         $("mcp-editor-title").textContent = `Editar ${editingName}`;
-        feedback(
-          "mcp-editor-feedback",
-          "Servidor salvo. Você pode descobrir ferramentas e escolher as permissões abaixo.",
-        );
+        try {
+          await discoverSavedTools(editingName, generation);
+          if (generation !== requestGeneration) return;
+          feedback(
+            "mcp-editor-feedback",
+            tools.length
+              ? `Servidor salvo. ${tools.length} ferramentas atualizadas no catálogo.`
+              : "Servidor salvo. O catálogo não retornou ferramentas.",
+          );
+        } catch (error) {
+          if (generation !== requestGeneration) return;
+          feedback("mcp-editor-error", error.message);
+          feedback(
+            "mcp-editor-feedback",
+            "Servidor salvo; não foi possível atualizar o catálogo.",
+          );
+        }
       },
     );
   };
+  async function discoverSavedTools(name, generation = requestGeneration) {
+    const result = await api(`/api/mcp/${encodeURIComponent(name)}/tools`);
+    if (generation !== requestGeneration) return false;
+    if (result.error) throw new Error(result.error);
+    if (!Array.isArray(result.tools))
+      throw new Error(
+        "A resposta do servidor não contém um catálogo de ferramentas válido.",
+      );
+    tools = result.tools;
+    discovered.set(name, tools);
+    mcpStatus = mcpStatus.filter((entry) => entry.server !== name);
+    mcpStatus.push({ server: name, tools });
+    renderServers();
+    renderTools();
+    return true;
+  }
   $("mcp-discover").onclick = () => {
     void act(
       "mcp-editor-error",
@@ -471,25 +606,18 @@ export function configureUI(api, callbacks) {
           "mcp-editor-feedback",
           "Consultando as ferramentas deste servidor…",
         );
-        const result = await api(
-          `/api/mcp/${encodeURIComponent(saved.name)}/tools`,
-        );
+        await discoverSavedTools(saved.name, generation);
         if (generation !== requestGeneration) return;
-        tools = result.tools;
-        discovered.set(saved.name, tools);
-        renderTools();
         feedback(
           "mcp-editor-feedback",
           tools.length
-            ? "Ferramentas encontradas. Marque as permitidas e salve o servidor para aplicar."
+            ? "Catálogo atualizado. Ajuste a disponibilidade abaixo e salve para aplicar."
             : "O servidor não retornou ferramentas.",
         );
       },
     );
   };
   function renderTools() {
-    const readTools = names($("mcp-read-tools").value);
-    const actionTools = names($("mcp-action-tools").value);
     $("mcp-tools").replaceChildren(
       ...tools.map((tool, index) => {
         const row = node("div", undefined, "discovered-tool");
@@ -503,38 +631,37 @@ export function configureUI(api, callbacks) {
         );
         description.append(schema);
         const choices = node("div", undefined, "tool-choices");
-        for (const [kind, label, selected] of [
-          ["read", "Leitura", readTools],
-          ["action", "Ação", actionTools],
-        ]) {
+        if (editorMode === "direct") {
           const choice = node("label", undefined, "checkbox-line");
           const checkbox = node("input");
           checkbox.type = "checkbox";
-          checkbox.checked = selected.includes(tool.name);
-          checkbox.id = `tool-${index}-${kind}`;
+          checkbox.checked =
+            (allowedTools === undefined || allowedTools.includes(tool.name)) &&
+            !deniedTools.includes(tool.name);
+          checkbox.id = `tool-${index}-available`;
           choice.htmlFor = checkbox.id;
-          choice.append(checkbox, node("span", label));
+          choice.append(checkbox, node("span", "Disponível"));
           checkbox.onchange = () => {
-            const field =
-              kind === "read" ? "mcp-read-tools" : "mcp-action-tools";
-            const other =
-              kind === "read" ? "mcp-action-tools" : "mcp-read-tools";
-            const selectedTools = names($(field).value).filter(
-              (name) => name !== tool.name,
-            );
             if (checkbox.checked) {
-              selectedTools.push(tool.name);
-              $(other).value = names($(other).value)
-                .filter((name) => name !== tool.name)
-                .join("\n");
+              if (
+                allowedTools !== undefined &&
+                !allowedTools.includes(tool.name)
+              )
+                allowedTools.push(tool.name);
+              deniedTools = deniedTools.filter((name) => name !== tool.name);
+            } else if (allowedTools === undefined) {
+              deniedToolsPresent = true;
+              if (!deniedTools.includes(tool.name)) deniedTools.push(tool.name);
+            } else {
+              allowedTools = allowedTools.filter((name) => name !== tool.name);
             }
-            $(field).value = selectedTools.join("\n");
             renderTools();
             $(checkbox.id)?.focus();
           };
           choices.append(choice);
         }
-        row.append(description, choices);
+        row.append(description);
+        if (editorMode === "direct") row.append(choices);
         return row;
       }),
     );

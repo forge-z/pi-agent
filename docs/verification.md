@@ -1,5 +1,21 @@
 # Verificação local do MVP
 
+## MCP direto: verificação mais recente
+
+Em 7 de outubro de 2026, Node.js 26.0.0, a suíte completa passou com **49 testes**, sem falhas ou skips. Tipos, lint, build, sintaxe dos scripts web e `git diff --check` passaram.
+
+A cobertura adicionada inclui descoberta paginada e isolamento de falhas; restrições opcionais e precedência de bloqueios; fallback SSE somente em HTTP 404/405; ferramentas MCP chamadas diretamente pelo Durable; formulários/URLs nativos sem aceitação automática; pausa/retomada persistida, decisões duplicadas e transações interrompidas; rotação de credencial; cancelamento de solicitações retiradas pelo servidor; recuperação de resultados grandes; e SIGKILL durante uma chamada direta sem replay do efeito.
+
+Na interface compilada com dados e senha descartáveis em loopback, foram verificados login, descoberta, salvamento com atualização automática do catálogo e resposta a formulário MCP nativo. O formulário exibiu campos do schema do servidor; após preencher e aceitar a solicitação do mock, ela saiu do estado pendente e o servidor mock confirmou a decisão. Nenhum serviço externo, conta real ou credencial real foi utilizado.
+
+![Servidor salvo e ferramenta descoberta](evidence/mcp-direct/catalog.jpg)
+
+![Formulário de permissão MCP nativa no mock local](evidence/mcp-direct/native-permission.jpg)
+
+![Solicitação concluída e removida da área de pendências](evidence/mcp-direct/native-completed.jpg)
+
+O Executor real ainda precisa ser validado com seu endpoint e schema de pausa. Transporte stdio e OAuth de servidor MCP não fazem parte desta implementação; o cliente usa bearer token provisionado. Docker não está disponível nesta máquina, portanto não houve novo build de container. As verificações anteriores abaixo permanecem como histórico.
+
 Executada em 7 de outubro de 2026, Node.js 26.0.0 / npm 12.0.1, macOS. O alvo de produção no Dockerfile é Node.js 24.
 
 - `npm run check`: passou.

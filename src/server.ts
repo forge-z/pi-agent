@@ -12,7 +12,7 @@ import { ProviderLogin } from "./provider-login.js";
 import type { Telegram, TelegramUpdate } from "./telegram.js";
 import { Tasks, TaskError } from "./tasks.js";
 import { SettingsError } from "./settings.js";
-import { PolicyError } from "./mcp.js";
+import { PolicyError, McpError } from "./mcp.js";
 export interface ServerOptions {
   password: string;
   origin: string;
@@ -271,6 +271,54 @@ export function createAppServer(app: Runtime, options: ServerOptions) {
             return json(response, 200, { ok: true });
           }
         }
+        const interactionRoute =
+          /^\/api\/conversations\/([0-9]+)\/mcp-interactions\/([a-f0-9-]+)$/.exec(
+            path,
+          );
+        if (interactionRoute && method === "POST") {
+          const [, id, interactionId] = interactionRoute;
+          await app.conversation(id);
+          const input = await body(request);
+          const decision = text(input.action);
+          if (!["accept", "decline", "cancel"].includes(decision))
+            throw new HttpError(400, "Decisão MCP inválida");
+          if (
+            input.content !== undefined &&
+            (!input.content ||
+              typeof input.content !== "object" ||
+              Array.isArray(input.content))
+          )
+            throw new HttpError(400, "Resposta MCP inválida");
+          const interaction = await app.mcpCalls.decide(
+            id,
+            interactionId,
+            decision as "accept" | "decline" | "cancel",
+            input.content as Record<string, unknown> | undefined,
+          );
+          if (interaction.kind === "resume") {
+            const call = app.mcpCalls
+              .list(id)
+              .find((c) => c.id === interaction.callId);
+            if (call) await app.recordMcpOutcome(call);
+          }
+          return json(response, 200, interaction);
+        }
+        const reconcileMcp =
+          /^\/api\/conversations\/([0-9]+)\/mcp-calls\/([a-f0-9]{24})\/reconcile$/.exec(
+            path,
+          );
+        if (reconcileMcp && method === "POST") {
+          await app.conversation(reconcileMcp[1]);
+          return json(
+            response,
+            200,
+            app.mcpCalls.reconcile(
+              reconcileMcp[1],
+              reconcileMcp[2],
+              text((await body(request)).note),
+            ),
+          );
+        }
         const route =
           /^\/api\/conversations\/([0-9]+)(?:\/(messages|events|link|actions|settings)(?:\/([a-f0-9]{24}))?)?$/.exec(
             path,
@@ -437,7 +485,8 @@ export function createAppServer(app: Runtime, options: ServerOptions) {
           error instanceof HttpError ||
           error instanceof SettingsError ||
           error instanceof TaskError ||
-          error instanceof PolicyError
+          error instanceof PolicyError ||
+          error instanceof McpError
             ? error.message
             : "Não foi possível processar a operação",
       });

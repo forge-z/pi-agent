@@ -2,8 +2,19 @@
   {
     "name": "calendar",
     "url": "https://mcp.example.net/mcp",
+    "mode": "legacy",
     "readTools": ["list_events"],
     "actionTools": ["create_event"],
     "tokenFile": "/run/secrets/calendar_mcp_token"
+  },
+  {
+    "name": "research",
+    "url": "https://research.example.net/mcp",
+    "mode": "direct",
+    "readTools": [],
+    "actionTools": [],
+    "allowedTools": ["search_web", "get_contents"],
+    "deniedTools": ["delete_index"],
+    "tokenFile": "/run/secrets/research_mcp_token"
   }
 ]

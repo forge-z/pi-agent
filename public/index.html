@@ -518,7 +518,7 @@
               ><span id="composer-hint"
                 ><svg class="icon" aria-hidden="true">
                   <use href="/icons.svg#shield-check" /></svg
-                >Você confirma antes de Pi agir.</span
+                >Seu histórico, sempre à mão.</span
               >
             </div>
           </footer>
@@ -592,9 +592,9 @@
             <use href="/icons.svg#shield-check" />
           </svg>
           <p>
-            Você escolhe as ferramentas permitidas. Leituras podem ocorrer
-            durante a conversa; ações de escrita sempre pedem sua confirmação.
-            Descobrir ferramentas não autoriza seu uso.
+            Servidores novos usam chamadas diretas às ferramentas. Servidores
+            antigos continuam no modo de compatibilidade até você ativar a
+            integração automática.
           </p>
         </div>
         <div id="mcp-list" class="management-list" aria-live="polite"></div>
@@ -661,42 +661,63 @@
               >
             </div>
           </details>
-          <div class="tool-permissions">
-            <div>
-              <h4>Ferramentas de leitura</h4>
-              <p>Podem consultar dados sem pedir aprovação.</p>
-              <div class="form-field">
-                <label for="mcp-read-tools"
-                  >Nomes permitidos, um por linha</label
-                ><textarea
-                  id="mcp-read-tools"
-                  rows="3"
-                  spellcheck="false"
-                  placeholder="search\nget_record"
-                ></textarea>
-              </div>
-            </div>
-            <div>
-              <h4>Ferramentas de ação</h4>
-              <p>Cada execução precisa de aprovação.</p>
-              <div class="form-field">
-                <label for="mcp-action-tools"
-                  >Nomes permitidos, um por linha</label
-                ><textarea
-                  id="mcp-action-tools"
-                  rows="3"
-                  spellcheck="false"
-                  placeholder="create_record\nupdate_record"
-                ></textarea>
-              </div>
-            </div>
+          <div id="mcp-legacy-mode" class="form-field" hidden>
+            <p id="mcp-legacy-notice" class="card-meta">
+              Modo de compatibilidade. As listas de leitura e ação abaixo mantêm
+              as permissões atuais.
+            </p>
+            <label class="checkbox-line" for="mcp-use-direct">
+              <input id="mcp-use-direct" type="checkbox" />Usar integração
+              automática
+            </label>
+            <small>
+              Ao salvar, a união das ferramentas existentes será permitida no
+              modo direto. Chamadas diretas via execute podem ler e gravar
+              dados.
+            </small>
           </div>
+          <div id="mcp-direct-mode" class="form-field" hidden>
+            <p id="mcp-direct-notice"></p>
+          </div>
+          <details id="mcp-legacy-permissions" class="advanced-fields" hidden>
+            <summary>Ferramentas e permissões de compatibilidade</summary>
+            <div class="tool-permissions">
+              <div>
+                <h4>Ferramentas de leitura</h4>
+                <p>Podem consultar dados sem pedir aprovação.</p>
+                <div class="form-field">
+                  <label for="mcp-read-tools"
+                    >Nomes permitidos, um por linha</label
+                  ><textarea
+                    id="mcp-read-tools"
+                    rows="3"
+                    spellcheck="false"
+                    placeholder="search\nget_record"
+                  ></textarea>
+                </div>
+              </div>
+              <div>
+                <h4>Ferramentas de ação</h4>
+                <p>Cada execução precisa de aprovação.</p>
+                <div class="form-field">
+                  <label for="mcp-action-tools"
+                    >Nomes permitidos, um por linha</label
+                  ><textarea
+                    id="mcp-action-tools"
+                    rows="3"
+                    spellcheck="false"
+                    placeholder="create_record\nupdate_record"
+                  ></textarea>
+                </div>
+              </div>
+            </div>
+          </details>
           <div class="discovery-heading">
             <button id="mcp-discover" type="button" class="subtle">
               <svg class="icon" aria-hidden="true">
                 <use href="/icons.svg#magnifying-glass" /></svg
-              >Descobrir ferramentas</button
-            ><small>Salve o endpoint antes de descobrir.</small>
+              >Atualizar ferramentas</button
+            ><small>O catálogo também é atualizado ao salvar.</small>
           </div>
           <div id="mcp-tools" class="discovered-tools"></div>
           <p id="mcp-editor-error" class="error" role="alert"></p>
@@ -768,7 +789,7 @@
         </svg>
         <p>
           O resultado fica na conversa. Não há envio automático ao Telegram.
-          Ações de escrita continuam exigindo sua confirmação.
+          As permissões das ferramentas também se aplicam às tarefas.
         </p>
       </div>
       <p id="tasks-error" class="error" role="alert"></p>

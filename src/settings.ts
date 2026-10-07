@@ -132,12 +132,20 @@ export class Settings {
         typeof item.url !== "string" ||
         item.name.length > 80 ||
         item.url.length > 2000 ||
-        !Array.isArray(item.readTools) ||
-        !Array.isArray(item.actionTools) ||
-        item.readTools.length + item.actionTools.length > 200
+        (item.mode !== "direct" &&
+          (!Array.isArray(item.readTools) || !Array.isArray(item.actionTools)))
       )
         throw new SettingsError("Configuração MCP inválida");
       const old = gateway.config.find((c) => c.name === item.name);
+      if (
+        old &&
+        old.mode !== "direct" &&
+        item.mode === "direct" &&
+        item.migrateLegacy !== true
+      )
+        throw new SettingsError(
+          "Confirme explicitamente a migração para chamadas MCP diretas",
+        );
       if (
         old?.url !== item.url &&
         (old?.tokenFile || (old?.token && item.token === undefined))
@@ -159,8 +167,25 @@ export class Settings {
       return {
         name: item.name,
         url: item.url,
-        readTools: [...new Set(item.readTools)] as string[],
-        actionTools: [...new Set(item.actionTools)] as string[],
+        mode: item.mode ?? old?.mode ?? "legacy",
+        readTools: item.readTools ?? old?.readTools ?? [],
+        actionTools: item.actionTools ?? old?.actionTools ?? [],
+        ...(item.allowedTools !== undefined
+          ? { allowedTools: item.allowedTools }
+          : old && old.mode !== "direct" && item.mode === "direct"
+            ? {
+                allowedTools: [
+                  ...new Set([...old.readTools, ...old.actionTools]),
+                ],
+              }
+            : old?.allowedTools !== undefined
+              ? { allowedTools: old.allowedTools }
+              : {}),
+        ...(item.deniedTools !== undefined
+          ? { deniedTools: item.deniedTools }
+          : old?.deniedTools !== undefined
+            ? { deniedTools: old.deniedTools }
+            : {}),
         ...(old?.tokenFile ? { tokenFile: old.tokenFile } : {}),
         token: item.token === undefined ? old?.token : item.token || undefined,
       };
@@ -170,6 +195,9 @@ export class Settings {
       this.app.store.get("SELECT 1 FROM requests WHERE status='pending'") ||
       this.app.store.get(
         "SELECT 1 FROM actions WHERE state IN ('pending','running','uncertain')",
+      ) ||
+      this.app.store.get(
+        "SELECT 1 FROM mcp_calls WHERE state IN ('running','paused','uncertain')",
       )
     )
       throw new SettingsError(
@@ -191,10 +219,12 @@ export class Settings {
     }
     const closeOld = gateway.replace(config);
     await closeOld;
+    await this.app.refreshMcpTools();
     return this.mcp();
   }
   async discover(name: string) {
     const tools = await this.gateway().discover(name);
+    await this.app.refreshMcpTools();
     return {
       tools: tools.map(({ name, description, inputSchema }) => ({
         name,
@@ -209,6 +239,7 @@ export class Settings {
       ...this.defaults(),
       models: this.catalog(),
       mcp: this.mcp(),
+      mcpStatus: this.app.mcpStatus,
     };
   }
 }

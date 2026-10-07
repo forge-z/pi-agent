@@ -1,6 +1,6 @@
 # Pi Personal Agent
 
-Um assistente pessoal com histórico durável, interface web e integração opcional com Telegram e ferramentas MCP. No modo `demo`, as conversas ficam locais e recebem respostas simuladas; nenhuma conta externa é necessária. No modo `live`, o login OpenAI é feito pela interface e ações em serviços externos aguardam aprovação explícita.
+Um assistente pessoal com histórico durável, interface web e integração opcional com Telegram e ferramentas MCP. No modo `demo`, as conversas ficam locais e recebem respostas simuladas; nenhuma conta externa é necessária. No modo `live`, o login OpenAI é feito pela interface. Ferramentas MCP podem usar o modo `legacy`, com propostas e confirmação da aplicação, ou `direct`, com execução direta e as permissões nativas do serviço.
 
 ## Rodar localmente
 
@@ -37,7 +37,7 @@ Use `npm run build` para compilar; `npm start` inicia `dist/src/main.js`. O runt
 
 O workspace web usa uma senha compartilhada para um operador; não há usuários individuais nem RBAC. No modo live, clique em **Sign in with ChatGPT** para completar o OAuth interativo. Essa conta é independente da senha da interface.
 
-Antes de permitir ações MCP, confira os nomes em `actionTools` e as permissões reais do servidor. Ferramentas só podem ser propostas depois que a conversa fizer uma leitura MCP; o operador precisa garantir que cada `readTools` seja estritamente de leitura. Consulte [arquitetura e limites](docs/architecture.md) e [implantação](docs/deployment.md).
+Antes de conectar ferramentas MCP, revise as permissões do serviço e a lista `allowedTools`/`deniedTools`. O modo `direct` chama ferramentas sem confirmação adicional da aplicação, e uma chamada `execute` não garante que a ferramenta seja somente de leitura. O modo `legacy` mantém listas `readTools`/`actionTools`, leitura antes da proposta e confirmação do operador. Consulte [configurações e tarefas](docs/settings-and-tasks.md), [arquitetura e limites](docs/architecture.md) e [implantação](docs/deployment.md).
 
 ## Licenças
 
