@@ -1,1 +1,16 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 192"><rect width="192" height="192" rx="42" fill="#18181b"/><text x="37" y="131" font-family="sans-serif" font-size="111" font-weight="700" fill="white">pi</text><circle cx="159" cy="127" r="9" fill="#60a5fa"/></svg>
+<svg xmlns="http://www.w3.org/2000/svg" width="560" height="560" fill="none" viewBox="0 0 560 560">
+  <style>
+    .mark {
+      fill: #111111;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      .mark {
+        fill: #f6f6f6;
+      }
+    }
+  </style>
+  <path class="mark" d="M420 280H280V140H0V0H420V280Z"/>
+  <path class="mark" d="M560 560H420V280H560V560Z"/>
+  <path class="mark" d="M140 560H0V140H140V280H280V420H140V560Z"/>
+</svg>

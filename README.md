@@ -53,3 +53,9 @@ npm test
 Veja [evidências e limites da verificação](docs/verification.md).
 
 Os testes usam provider faux, MCP HTTP em loopback e transporte Telegram mock. Incluem `SIGKILL` durante geração, efeito externo e envio; o teste aguarda 31 segundos pela expiração do lock antes de retomar. Nenhuma conta real é usada.
+
+## Aparência
+
+A interface tem paletas **Azul** e **Cinza**, com modos **Claro**, **Escuro** e **Automático** independentes. Os seletores ficam na entrada e no rodapé da navegação; no celular, abra o menu. A preferência é salva no navegador. O modo automático acompanha o sistema.
+
+O logo é o oficial do Pi, os ícones são Phosphor e as fontes são servidas localmente. Veja [a direção visual](docs/design.md) e [as capturas e verificações](docs/verification.md#refinamento-visual-paletas-e-modos-de-aparência).

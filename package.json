@@ -12,7 +12,7 @@
     "start": "node dist/src/main.js",
     "build": "tsc -p tsconfig.json",
     "check": "tsc --noEmit",
-    "lint": "eslint src test public/app.js public/sw.js",
+    "lint": "eslint src test public/*.js",
     "test": "node --import tsx --test test/*.test.ts"
   },
   "dependencies": {

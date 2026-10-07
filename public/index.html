@@ -3,134 +3,533 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <meta name="theme-color" content="#18181b" />
+    <meta name="theme-color" content="#f5f8fc" />
+    <meta name="color-scheme" content="light dark" />
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="icon" href="/icon.svg" />
+    <link
+      rel="preload"
+      href="/fonts/dm-sans-400-normal.ttf"
+      as="font"
+      type="font/ttf"
+      crossorigin
+    />
+    <link
+      rel="preload"
+      href="/fonts/instrument-serif-400-normal.ttf"
+      as="font"
+      type="font/ttf"
+      crossorigin
+    />
+    <script src="/theme.js"></script>
     <link rel="stylesheet" href="/style.css" />
     <title>Pi · Assistente pessoal</title>
     <script type="module" src="/app.js"></script>
   </head>
   <body>
-    <section id="login" class="login">
-      <div class="login-card">
-        <span class="wordmark">pi<span class="dot">.</span></span>
-        <p class="eyebrow">SEU ASSISTENTE PESSOAL</p>
-        <h1>Uma conversa.<br />Onde você estiver.</h1>
-        <p class="muted">
-          Continue pela web ou pelo Telegram. Seu histórico e suas decisões
-          ficam juntos.
-        </p>
-        <form id="login-form">
-          <label for="password">Senha da interface</label
-          ><input
-            id="password"
-            type="password"
-            autocomplete="current-password"
-            required
-            minlength="12"
-          /><button type="submit">
-            Entrar no workspace <span aria-hidden="true">→</span>
-          </button>
-        </form>
-        <p id="login-error" class="error" role="alert"></p>
-        <p class="fine">
-          O login desta interface é separado da sua conta ChatGPT.
+    <section id="login" class="login" aria-label="Entrar no Pi">
+      <div class="login-story">
+        <div class="brand brand-light">
+          <img
+            class="brand-icon"
+            src="/pi-logo.svg"
+            alt="Pi"
+            width="64"
+            height="64"
+          />
+        </div>
+        <div class="story-copy">
+          <p class="eyebrow">UM POUCO MAIS DE CLAREZA</p>
+          <h1>Suas ideias.<br />Seu ritmo.<br /><em>Seu espaço.</em></h1>
+          <p>
+            Um lugar para pensar, organizar e seguir em frente. Uma conversa que
+            acompanha você.
+          </p>
+        </div>
+        <div class="story-art" aria-hidden="true">
+          <div class="orbit orbit-one"></div>
+          <div class="orbit orbit-two"></div>
+          <div class="art-mark">
+            <img src="/pi-logo.svg" alt="" width="240" height="240" />
+          </div>
+          <div class="art-note note-one">
+            <svg class="icon" aria-hidden="true">
+              <use href="/icons.svg#chat-circle" /></svg
+            ><span>Uma ideia de cada vez.</span>
+          </div>
+          <div class="art-note note-two">
+            <svg class="icon" aria-hidden="true">
+              <use href="/icons.svg#check-circle" /></svg
+            ><span>O próximo passo, mais claro.</span>
+          </div>
+        </div>
+        <div class="story-foot">
+          <span>WEB & TELEGRAM</span><span>A conversa continua.</span>
+        </div>
+      </div>
+      <div class="login-content">
+        <div class="login-top">
+          <span class="fine">Seu espaço pessoal</span>
+          <div class="login-preferences">
+            <div
+              class="palette-switch"
+              role="group"
+              aria-label="Paleta de cores"
+            >
+              <button
+                type="button"
+                data-palette-choice="blue"
+                aria-label="Paleta azul"
+                title="Paleta azul"
+                aria-pressed="true"
+              >
+                <span class="palette-swatch" aria-hidden="true"></span
+                >Azul</button
+              ><button
+                type="button"
+                data-palette-choice="gray"
+                aria-label="Paleta cinza"
+                title="Paleta cinza"
+                aria-pressed="false"
+              >
+                <span class="palette-swatch" aria-hidden="true"></span>Cinza
+              </button>
+            </div>
+            <div class="theme-switch" role="group" aria-label="Aparência">
+              <button
+                type="button"
+                data-theme-choice="light"
+                aria-label="Tema claro"
+                title="Tema claro"
+                aria-pressed="false"
+              >
+                <svg class="icon" aria-hidden="true">
+                  <use href="/icons.svg#sun" />
+                </svg>
+              </button>
+              <button
+                type="button"
+                data-theme-choice="dark"
+                aria-label="Tema escuro"
+                title="Tema escuro"
+                aria-pressed="false"
+              >
+                <svg class="icon" aria-hidden="true">
+                  <use href="/icons.svg#moon" />
+                </svg>
+              </button>
+              <button
+                type="button"
+                data-theme-choice="auto"
+                aria-label="Tema automático"
+                title="Automático: acompanhar o sistema"
+                aria-pressed="true"
+              >
+                <svg class="icon" aria-hidden="true">
+                  <use href="/icons.svg#monitor" />
+                </svg>
+              </button>
+            </div>
+          </div>
+        </div>
+        <div class="login-card">
+          <img
+            class="login-mark"
+            src="/pi-logo.svg"
+            alt="Pi"
+            width="80"
+            height="80"
+          />
+          <p class="eyebrow">BEM-VINDO AO PI</p>
+          <h2>Bom ter você<br /><em>por aqui.</em></h2>
+          <p class="muted">
+            Entre para retomar suas conversas e abrir espaço para novas ideias.
+          </p>
+          <form id="login-form">
+            <label for="password">Senha do seu espaço</label>
+            <div class="password-field">
+              <svg class="icon" aria-hidden="true">
+                <use href="/icons.svg#key" /></svg
+              ><input
+                id="password"
+                type="password"
+                autocomplete="current-password"
+                placeholder="Digite sua senha"
+                aria-describedby="login-error"
+                required
+                minlength="12"
+              />
+            </div>
+            <button id="login-submit" type="submit">
+              Entrar no meu espaço
+              <svg class="icon" aria-hidden="true">
+                <use href="/icons.svg#arrow-right" />
+              </svg>
+            </button>
+          </form>
+          <p id="login-error" class="error" role="alert"></p>
+          <div class="login-note">
+            <svg class="icon" aria-hidden="true">
+              <use href="/icons.svg#shield-check" />
+            </svg>
+            <p>
+              Este acesso é pessoal. A conexão com sua conta ChatGPT acontece
+              dentro do Pi.
+            </p>
+          </div>
+        </div>
+        <p class="login-footer">
+          Menos pontas soltas. Mais espaço para o que importa.
         </p>
       </div>
     </section>
     <div id="workspace" class="workspace" hidden>
-      <aside>
+      <a class="skip-link" href="#message">Ir para a mensagem</a>
+      <div id="sidebar-backdrop" class="sidebar-backdrop" hidden></div>
+      <aside id="sidebar" class="sidebar" aria-label="Seu espaço">
         <div class="brand">
-          <span class="wordmark">pi<span class="dot">.</span></span
-          ><span class="tag">pessoal</span>
-        </div>
-        <button id="new-conversation" class="new">+ Nova conversa</button>
-        <p class="eyebrow">CONVERSAS</p>
-        <nav id="conversations" aria-label="Conversas"></nav>
-        <div class="sidebar-bottom">
-          <button id="provider-button" class="subtle">
-            Sign in with ChatGPT
+          <img
+            class="brand-icon"
+            src="/pi-logo.svg"
+            alt="Pi"
+            width="64"
+            height="64"
+          />
+          <button
+            id="close-sidebar"
+            class="icon-button mobile-only"
+            aria-label="Fechar menu"
+          >
+            <svg class="icon" aria-hidden="true">
+              <use href="/icons.svg#x" />
+            </svg>
           </button>
-          <p id="provider-status" class="fine"></p>
-          <button id="logout" class="subtle">Sair</button>
+        </div>
+        <button id="new-conversation" class="new">
+          <svg class="icon" aria-hidden="true">
+            <use href="/icons.svg#plus" /></svg
+          >Nova conversa<svg class="icon new-arrow" aria-hidden="true">
+            <use href="/icons.svg#arrow-up-right" />
+          </svg>
+        </button>
+        <label class="search-field" for="search-conversations"
+          ><svg class="icon" aria-hidden="true">
+            <use href="/icons.svg#magnifying-glass" /></svg
+          ><input
+            id="search-conversations"
+            type="search"
+            placeholder="Buscar conversas"
+            autocomplete="off"
+          /><span class="sr-only">Buscar conversas</span></label
+        >
+        <div class="section-label">
+          <span>SUAS CONVERSAS</span><span id="conversation-count"></span>
+        </div>
+        <nav id="conversations" aria-label="Conversas"></nav>
+        <p id="search-empty" class="search-empty" hidden>
+          Nenhuma conversa encontrada.
+        </p>
+        <div class="sidebar-bottom">
+          <div class="continuity-note">
+            <svg class="icon" aria-hidden="true">
+              <use href="/icons.svg#chat-circle" />
+            </svg>
+            <p>Comece aqui.<br /><strong>Continue de onde estiver.</strong></p>
+          </div>
+          <button id="provider-button" class="provider-button">
+            <span class="provider-icon"
+              ><svg class="icon" aria-hidden="true">
+                <use href="/icons.svg#plug" /></svg></span
+            ><span
+              ><span class="provider-label">Conectar ChatGPT</span
+              ><span id="provider-status" class="fine"
+                >Verificando conexão</span
+              ></span
+            ><svg class="icon provider-arrow" aria-hidden="true">
+              <use href="/icons.svg#arrow-up-right" />
+            </svg>
+          </button>
+          <div class="palette-row">
+            <span>Paleta</span>
+            <div
+              class="palette-switch"
+              role="group"
+              aria-label="Paleta de cores"
+            >
+              <button
+                type="button"
+                data-palette-choice="blue"
+                aria-label="Paleta azul"
+                title="Paleta azul"
+                aria-pressed="true"
+              >
+                <span class="palette-swatch" aria-hidden="true"></span
+                >Azul</button
+              ><button
+                type="button"
+                data-palette-choice="gray"
+                aria-label="Paleta cinza"
+                title="Paleta cinza"
+                aria-pressed="false"
+              >
+                <span class="palette-swatch" aria-hidden="true"></span>Cinza
+              </button>
+            </div>
+          </div>
+          <div class="appearance-row">
+            <span>Aparência</span>
+            <div class="theme-switch" role="group" aria-label="Aparência">
+              <button
+                type="button"
+                data-theme-choice="light"
+                aria-label="Tema claro"
+                title="Tema claro"
+                aria-pressed="false"
+              >
+                <svg class="icon" aria-hidden="true">
+                  <use href="/icons.svg#sun" />
+                </svg>
+              </button>
+              <button
+                type="button"
+                data-theme-choice="dark"
+                aria-label="Tema escuro"
+                title="Tema escuro"
+                aria-pressed="false"
+              >
+                <svg class="icon" aria-hidden="true">
+                  <use href="/icons.svg#moon" />
+                </svg>
+              </button>
+              <button
+                type="button"
+                data-theme-choice="auto"
+                aria-label="Tema automático"
+                title="Automático: acompanhar o sistema"
+                aria-pressed="true"
+              >
+                <svg class="icon" aria-hidden="true">
+                  <use href="/icons.svg#monitor" />
+                </svg>
+              </button>
+            </div>
+          </div>
+          <div class="profile-row">
+            <span class="profile-avatar" aria-hidden="true">P</span>
+            <div><strong>Meu espaço</strong><span>Pessoal</span></div>
+            <button
+              id="logout"
+              class="icon-button"
+              aria-label="Sair"
+              title="Sair"
+            >
+              <svg class="icon" aria-hidden="true">
+                <use href="/icons.svg#sign-out" />
+              </svg>
+            </button>
+          </div>
         </div>
       </aside>
-      <main>
-        <header>
-          <div>
-            <p class="eyebrow">WORKSPACE</p>
-            <h1 id="conversation-title">Seu espaço de conversa</h1>
+      <main id="main">
+        <header class="workspace-header">
+          <button
+            id="open-sidebar"
+            class="icon-button mobile-only"
+            aria-label="Abrir menu"
+            aria-controls="sidebar"
+            aria-expanded="false"
+          >
+            <svg class="icon" aria-hidden="true">
+              <use href="/icons.svg#list" />
+            </svg>
+          </button>
+          <div class="header-title">
+            <p class="eyebrow">SEU ESPAÇO</p>
+            <h1 id="conversation-title">Nova conversa</h1>
           </div>
           <div class="header-actions">
-            <span id="connection" class="tag" role="status">Conectando</span
-            ><button id="link-button" class="subtle">Vincular Telegram</button>
+            <span
+              id="connection"
+              class="connection"
+              role="status"
+              data-state="connecting"
+              >Conectando</span
+            ><span class="header-divider" aria-hidden="true"></span
+            ><button
+              id="link-button"
+              class="subtle"
+              aria-label="Vincular Telegram"
+            >
+              <svg class="icon" aria-hidden="true">
+                <use href="/icons.svg#telegram-logo" /></svg
+              ><span>Vincular Telegram</span>
+            </button>
           </div>
         </header>
         <div id="banner" class="banner" role="status"></div>
         <div id="error" class="error notice" role="alert"></div>
-        <div class="conversation-body">
-          <section
-            id="messages"
-            class="messages"
-            aria-label="Histórico de mensagens"
-          >
-            <div class="welcome">
-              <span class="eyebrow">CONTINUIDADE, COM CONTROLE</span>
-              <h2>O que vamos resolver hoje?</h2>
+        <div id="main-content" class="main-content is-empty">
+          <div class="conversation-body">
+            <section
+              id="welcome"
+              class="welcome"
+              aria-labelledby="welcome-title"
+            >
+              <img
+                class="welcome-mark"
+                src="/pi-logo.svg"
+                alt=""
+                width="96"
+                height="96"
+              />
+              <p class="eyebrow">SEU DIA, COM MAIS CLAREZA</p>
+              <h2 id="welcome-title">
+                O que vamos<br /><em>resolver hoje?</em>
+              </h2>
               <p>
-                Comece uma conversa. Antes de agir em serviços externos, Pi pede
-                sua confirmação.
+                Uma ideia, um plano ou aquela tarefa pendente.<br
+                  class="desktop-break"
+                />
+                Vamos encontrar o próximo passo.
               </p>
-            </div>
-          </section>
-          <section
-            id="actions"
-            class="actions"
-            aria-label="Ações e aprovações"
-          ></section>
-          <section
-            id="deliveries"
-            class="deliveries"
-            aria-label="Entregas Telegram"
-          ></section>
-        </div>
-        <footer>
-          <form id="message-form">
-            <label for="message" class="sr-only">Sua mensagem</label
-            ><textarea
-              id="message"
-              rows="2"
-              placeholder="Escreva sua mensagem…"
-              required
-              maxlength="32000"
-            ></textarea
-            ><button id="send" type="submit">
-              Enviar <span aria-hidden="true">↑</span>
-            </button>
-          </form>
-          <div class="composer-meta">
-            <span id="run-status">Histórico salvo no servidor</span
-            ><span>Leitura primeiro. Você decide as ações.</span>
+            </section>
+            <section
+              id="messages"
+              class="messages"
+              aria-label="Histórico de mensagens"
+            ></section>
+            <section
+              id="actions"
+              class="actions"
+              aria-label="Ações e aprovações"
+            ></section>
+            <section
+              id="deliveries"
+              class="deliveries"
+              aria-label="Entregas Telegram"
+            ></section>
           </div>
-        </footer>
+          <footer class="composer-area">
+            <form id="message-form">
+              <label for="message" class="sr-only">Sua mensagem</label
+              ><textarea
+                id="message"
+                rows="2"
+                placeholder="Conte ao Pi o que está na sua cabeça…"
+                required
+                maxlength="32000"
+                aria-describedby="composer-hint"
+              ></textarea>
+              <div class="composer-toolbar">
+                <span class="composer-identity"
+                  ><img
+                    src="/pi-logo.svg"
+                    alt=""
+                    width="30"
+                    height="30"
+                  />Pi<span id="model-label">Assistente pessoal</span></span
+                ><span class="send-shortcut" aria-hidden="true"
+                  >⌘ / Ctrl + Enter</span
+                ><button
+                  id="send"
+                  type="submit"
+                  aria-label="Enviar mensagem"
+                  title="Enviar mensagem"
+                >
+                  <svg class="icon" aria-hidden="true">
+                    <use href="/icons.svg#arrow-up" />
+                  </svg>
+                </button>
+              </div>
+            </form>
+            <div
+              id="suggestions"
+              class="suggestions"
+              aria-label="Ideias para começar"
+            >
+              <button
+                type="button"
+                data-prompt="Quero organizar meu dia. Me ajude a listar minhas tarefas e escolher por onde começar."
+              >
+                <svg class="icon" aria-hidden="true">
+                  <use href="/icons.svg#calendar-blank" /></svg
+                ><span
+                  >Organizar meu dia<small>Do caos às prioridades</small></span
+                ><svg class="icon suggestion-arrow" aria-hidden="true">
+                  <use href="/icons.svg#arrow-up-right" />
+                </svg>
+              </button>
+              <button
+                type="button"
+                data-prompt="Tenho uma ideia e quero transformá-la em um plano. Me ajude a pensar nos primeiros passos."
+              >
+                <svg class="icon" aria-hidden="true">
+                  <use href="/icons.svg#lightbulb" /></svg
+                ><span
+                  >Desenvolver uma ideia<small
+                    >Dar forma ao próximo passo</small
+                  ></span
+                ><svg class="icon suggestion-arrow" aria-hidden="true">
+                  <use href="/icons.svg#arrow-up-right" />
+                </svg>
+              </button>
+              <button
+                type="button"
+                data-prompt="Quero escrever uma mensagem com mais clareza. Me ajude a organizar o que preciso dizer."
+              >
+                <svg class="icon" aria-hidden="true">
+                  <use href="/icons.svg#pencil-simple-line" /></svg
+                ><span
+                  >Encontrar as palavras<small
+                    >Escrever com mais clareza</small
+                  ></span
+                ><svg class="icon suggestion-arrow" aria-hidden="true">
+                  <use href="/icons.svg#arrow-up-right" />
+                </svg>
+              </button>
+            </div>
+            <div class="composer-meta">
+              <span id="run-status" role="status">Conversa salva</span
+              ><span id="composer-hint"
+                ><svg class="icon" aria-hidden="true">
+                  <use href="/icons.svg#shield-check" /></svg
+                >Você confirma antes de Pi agir.</span
+              >
+            </div>
+          </footer>
+        </div>
       </main>
     </div>
-    <dialog id="link-dialog">
+    <dialog id="link-dialog" aria-labelledby="link-title">
       <form method="dialog">
-        <button class="dialog-close" aria-label="Fechar">×</button>
+        <button class="dialog-close icon-button" aria-label="Fechar">
+          <svg class="icon" aria-hidden="true"><use href="/icons.svg#x" /></svg>
+        </button>
       </form>
-      <p class="eyebrow">A MESMA CONVERSA</p>
-      <h2>Continue no Telegram</h2>
+      <span class="dialog-icon"
+        ><svg class="icon" aria-hidden="true">
+          <use href="/icons.svg#telegram-logo" /></svg
+      ></span>
+      <p class="eyebrow">A CONVERSA VAI COM VOCÊ</p>
+      <h2 id="link-title">Continue no Telegram.</h2>
       <p>
-        Envie ao seu bot este comando, usando um usuário e chat permitidos na
-        configuração:
+        Envie o comando abaixo ao seu bot, usando um usuário e chat autorizados.
+        O histórico continua o mesmo.
       </p>
-      <code id="link-code"></code><button id="copy-link">Copiar comando</button>
+      <code id="link-code"></code
+      ><button id="copy-link">
+        <svg class="icon" aria-hidden="true"><use href="/icons.svg#copy" /></svg
+        ><span>Copiar comando</span>
+      </button>
       <p class="fine">Código de uso único, válido por 10 minutos.</p>
     </dialog>
-    <dialog id="provider-dialog">
-      <p class="eyebrow">PROVIDER OPENAI</p>
-      <h2>Sign in with ChatGPT</h2>
+    <dialog id="provider-dialog" aria-labelledby="provider-title">
+      <span class="dialog-icon"
+        ><svg class="icon" aria-hidden="true">
+          <use href="/icons.svg#plug" /></svg
+      ></span>
+      <p class="eyebrow">CONECTE SUA CONTA</p>
+      <h2 id="provider-title">Sign in with ChatGPT</h2>
       <p id="auth-state" role="status">Preparando login…</p>
       <div id="auth-events"></div>
       <form id="auth-form" hidden>
@@ -138,7 +537,9 @@
         ><input id="auth-value" autocomplete="off" required /><button
           type="submit"
         >
-          Continuar
+          Continuar<svg class="icon" aria-hidden="true">
+            <use href="/icons.svg#arrow-right" />
+          </svg>
         </button>
       </form>
       <button id="cancel-auth" class="subtle">Fechar / cancelar</button>

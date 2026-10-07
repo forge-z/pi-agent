@@ -330,6 +330,29 @@ export function createAppServer(app: Runtime, options: ServerOptions) {
         ],
         "/sw.js": ["sw.js", "text/javascript"],
         "/icon.svg": ["icon.svg", "image/svg+xml"],
+        "/theme.js": ["theme.js", "text/javascript"],
+        "/icons.svg": ["icons.svg", "image/svg+xml"],
+        "/pi-logo.svg": ["pi-logo.svg", "image/svg+xml"],
+        "/fonts/dm-sans-400-normal.ttf": [
+          "fonts/dm-sans-400-normal.ttf",
+          "font/ttf",
+        ],
+        "/fonts/dm-sans-500-normal.ttf": [
+          "fonts/dm-sans-500-normal.ttf",
+          "font/ttf",
+        ],
+        "/fonts/dm-sans-600-normal.ttf": [
+          "fonts/dm-sans-600-normal.ttf",
+          "font/ttf",
+        ],
+        "/fonts/instrument-serif-400-italic.ttf": [
+          "fonts/instrument-serif-400-italic.ttf",
+          "font/ttf",
+        ],
+        "/fonts/instrument-serif-400-normal.ttf": [
+          "fonts/instrument-serif-400-normal.ttf",
+          "font/ttf",
+        ],
       };
       const asset = assets[path];
       if (!asset) throw new HttpError(404, "Página não encontrada");

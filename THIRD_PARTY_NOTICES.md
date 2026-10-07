@@ -14,3 +14,10 @@ Este projeto usa ou se inspira nos seguintes trabalhos. Os arquivos de licença 
 O lifecycle de instalação/ativação do service worker e a ponte de interação de login foram adaptados como referências do Pi Pocket. O projeto Pi iMessage serviu como referência de desenho para transporte, fila, allowlist e entrega conservadora; nenhum código-fonte desse projeto foi copiado.
 
 Os demais pacotes runtime e de desenvolvimento, inclusive versões transitivas, estão registrados em [package-lock.json](package-lock.json). Consulte os metadados e avisos de cada pacote instalado para seus termos aplicáveis.
+
+## Identidade e recursos visuais
+
+- **Logo e favicon oficiais do Pi:** baixados sem alterar seus paths ou cores de [pi.dev/logo-auto.svg](https://pi.dev/logo-auto.svg) e [pi.dev/favicon.svg](https://pi.dev/favicon.svg), recursos publicados no [press kit oficial](https://pi.dev/press-kit). O site oficial informa licença MIT. A marca pertence ao projeto Pi; seu uso identifica a base tecnológica e não implica endosso desta aplicação.
+- **Phosphor Icons 2.1.1:** subconjunto de SVGs do pacote oficial `@phosphor-icons/core`, incorporado a `public/icons.svg`. Licença MIT de Phosphor Icons; texto integral em [vendor/Phosphor-MIT.txt](vendor/Phosphor-MIT.txt). Origem: [phosphor-icons/phosphor-core](https://github.com/phosphor-icons/phosphor-core).
+- **DM Sans e Instrument Serif:** arquivos originais do Google Fonts, hospedados localmente em `public/fonts/`. Licença SIL Open Font License 1.1; textos integrais em [vendor/DM-Sans-OFL.txt](vendor/DM-Sans-OFL.txt) e [vendor/Instrument-Serif-OFL.txt](vendor/Instrument-Serif-OFL.txt). Origens: [DM Sans](https://github.com/google/fonts/tree/main/ofl/dmsans) e [Instrument Serif](https://github.com/google/fonts/tree/main/ofl/instrumentserif).
+- **Refero Styles:** referências de direção visual de Cursor e Perplexity, detalhadas em [docs/design.md](docs/design.md). Nenhum código-fonte ou imagem desses produtos foi incorporado.
