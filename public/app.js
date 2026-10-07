@@ -1,3 +1,5 @@
+import { configureUI } from "/settings.js";
+
 const $ = (id) => document.getElementById(id);
 let conversationId = null;
 let events = null;
@@ -99,6 +101,7 @@ function showLogin() {
   document.querySelectorAll("dialog[open]").forEach((dialog) => dialog.close());
   $("login").hidden = false;
   $("workspace").hidden = true;
+  settingsUI.reset();
 }
 function report(error) {
   $("error").textContent = error.message;
@@ -179,11 +182,13 @@ async function refreshStatus() {
         ? "ChatGPT conectado"
         : "Conectar ChatGPT";
   $("provider-button").disabled = status.mode === "demo";
+  settingsUI.refreshLabel();
 }
 async function workspace() {
   $("login").hidden = true;
   $("workspace").hidden = false;
   await refreshStatus();
+  await settingsUI.load();
   const conversations = await loadConversations();
   const wanted = new URLSearchParams(location.search).get("c");
   const current =
@@ -207,6 +212,7 @@ async function select(id, title) {
   if (pendingMessage) $("message").value = pendingMessage.text;
   else $("message").value = "";
   conversationId = id;
+  settingsUI.updateConversation(null);
   rendered = "";
   renderedActions = "";
   $("connection").textContent = "Conectando";
@@ -238,6 +244,7 @@ function render(snapshot) {
   const encoded = JSON.stringify(snapshot);
   if (encoded === rendered) return;
   rendered = encoded;
+  settingsUI.updateConversation(snapshot.settings);
   const container = document.querySelector(".conversation-body");
   const nearBottom =
     container.scrollHeight - container.scrollTop - container.clientHeight < 120;
@@ -585,4 +592,20 @@ $("message").addEventListener("keydown", (event) => {
 });
 if ("serviceWorker" in navigator)
   navigator.serviceWorker.register("/sw.js").catch(() => {});
+const settingsUI = configureUI(api, {
+  icon,
+  node,
+  closeSidebar: () => sidebar(false, false),
+  getConversationId: () => conversationId,
+  getConversations: () => conversationsCache,
+  loadConversations,
+  refreshStatus,
+  selectConversation: select,
+  refreshConversation: async (id) => {
+    await loadConversations();
+    if (id !== conversationId) return;
+    const snapshot = await api(`/api/conversations/${encodeURIComponent(id)}`);
+    if (id === conversationId) render(snapshot);
+  },
+});
 api("/api/status").then(workspace).catch(showLogin);

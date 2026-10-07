@@ -1,0 +1,214 @@
+import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
+import {
+  clampThinkingLevel,
+  getSupportedThinkingLevels,
+} from "@earendil-works/pi-ai/models";
+import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
+import type { Runtime } from "./runtime.js";
+import { McpGateway, type McpConfig } from "./mcp.js";
+
+export interface ModelSettings {
+  modelId: string;
+  effort: ModelThinkingLevel;
+}
+export class SettingsError extends Error {}
+export class Settings {
+  constructor(private app: Runtime) {}
+  get provider() {
+    return (
+      this.app.options.provider ??
+      (this.app.options.mode === "live" ? "openai" : "faux")
+    );
+  }
+  defaults(): ModelSettings {
+    const row = this.app.store.get<{ value: string }>(
+      "SELECT value FROM meta WHERE key=?",
+      `model-defaults:${this.provider}`,
+    );
+    if (row) {
+      try {
+        return this.validate(JSON.parse(row.value) as Record<string, unknown>);
+      } catch {
+        /* A removed catalog entry must not break all new conversations. */
+      }
+    }
+    const modelId =
+      this.app.options.modelId ??
+      (this.app.options.mode === "live" ? "gpt-6.1-sol" : "faux-1");
+    const model = this.app.models.getModel(this.provider, modelId);
+    return {
+      modelId,
+      effort: model ? clampThinkingLevel(model, "high") : "high",
+    };
+  }
+  catalog() {
+    return this.app.models.getModels(this.provider).map((model) => ({
+      id: model.id,
+      name: model.name,
+      efforts: getSupportedThinkingLevels(model),
+    }));
+  }
+  validate(value: Record<string, unknown>): ModelSettings {
+    if (typeof value.modelId !== "string" || typeof value.effort !== "string")
+      throw new SettingsError("Escolha modelo e esforço");
+    const model = this.app.models.getModel(this.provider, value.modelId);
+    if (!model)
+      throw new SettingsError("Modelo não disponível no catálogo do Pi");
+    if (
+      !getSupportedThinkingLevels(model).includes(
+        value.effort as ModelThinkingLevel,
+      )
+    )
+      throw new SettingsError("Esforço não suportado por este modelo");
+    return {
+      modelId: value.modelId,
+      effort: value.effort as ModelThinkingLevel,
+    };
+  }
+  saveDefaults(value: Record<string, unknown>) {
+    const settings = this.validate(value);
+    this.app.store.run(
+      "INSERT INTO meta VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+      `model-defaults:${this.provider}`,
+      JSON.stringify(settings),
+    );
+    return settings;
+  }
+  async conversation(id: string): Promise<ModelSettings> {
+    const agent = await (await this.app.conversation(id)).agent(context);
+    return {
+      modelId: agent.model?.modelId ?? this.defaults().modelId,
+      effort: agent.thinkingLevel,
+    };
+  }
+  async saveConversation(id: string, value: Record<string, unknown>) {
+    const settings = this.validate(value);
+    const conversation = await this.app.conversation(id);
+    if (
+      this.app.store.get(
+        "SELECT 1 FROM requests WHERE conversationId=? AND status='pending'",
+        id,
+      )
+    )
+      throw new SettingsError(
+        "Aguarde a conversa concluir antes de mudar modelo e esforço",
+      );
+    await conversation.configure(
+      {
+        model: { provider: this.provider, modelId: settings.modelId },
+        thinkingLevel: settings.effort,
+      },
+      context,
+    );
+    return settings;
+  }
+  private gateway() {
+    if (!(this.app.options.gateway instanceof McpGateway))
+      throw new SettingsError("Gateway MCP não configurável neste ambiente");
+    return this.app.options.gateway;
+  }
+  async restoreMcp() {
+    const row = this.app.store.get<{ value: string }>(
+      "SELECT value FROM meta WHERE key='mcp-config'",
+    );
+    if (row) await this.gateway().replace(JSON.parse(row.value) as McpConfig[]);
+  }
+  mcp() {
+    if (!(this.app.options.gateway instanceof McpGateway)) return [];
+    return this.app.options.gateway.config.map(({ token, ...config }) => ({
+      ...config,
+      hasToken: !!token || !!config.tokenFile,
+    }));
+  }
+  async saveMcp(value: unknown) {
+    if (!Array.isArray(value) || value.length > 20)
+      throw new SettingsError("Informe até 20 servidores MCP");
+    const gateway = this.gateway();
+    const config: McpConfig[] = value.map((item) => {
+      if (
+        !item ||
+        typeof item !== "object" ||
+        typeof item.name !== "string" ||
+        typeof item.url !== "string" ||
+        item.name.length > 80 ||
+        item.url.length > 2000 ||
+        !Array.isArray(item.readTools) ||
+        !Array.isArray(item.actionTools) ||
+        item.readTools.length + item.actionTools.length > 200
+      )
+        throw new SettingsError("Configuração MCP inválida");
+      const old = gateway.config.find((c) => c.name === item.name);
+      if (
+        old?.url !== item.url &&
+        (old?.tokenFile || (old?.token && item.token === undefined))
+      )
+        throw new SettingsError(
+          "Para mudar o endpoint, crie outro servidor ou informe/remova explicitamente o token",
+        );
+      if (item.tokenFile !== undefined && item.tokenFile !== old?.tokenFile)
+        throw new SettingsError(
+          "Arquivos de tokens devem ser provisionados pelo operador; use token na interface",
+        );
+      if (
+        item.token !== undefined &&
+        (typeof item.token !== "string" ||
+          item.token.length > 16000 ||
+          /[\r\n]/.test(item.token))
+      )
+        throw new SettingsError("Token MCP inválido");
+      return {
+        name: item.name,
+        url: item.url,
+        readTools: [...new Set(item.readTools)] as string[],
+        actionTools: [...new Set(item.actionTools)] as string[],
+        ...(old?.tokenFile ? { tokenFile: old.tokenFile } : {}),
+        token: item.token === undefined ? old?.token : item.token || undefined,
+      };
+    });
+    new McpGateway(config);
+    if (
+      this.app.store.get("SELECT 1 FROM requests WHERE status='pending'") ||
+      this.app.store.get(
+        "SELECT 1 FROM actions WHERE state IN ('pending','running','uncertain')",
+      )
+    )
+      throw new SettingsError(
+        "Aguarde as conversas e resolva aprovações pendentes/incertas antes de alterar MCP",
+      );
+    // Validate before committing. Persist/invalidate together; switch before the first await.
+    gateway.checkReplacement(config);
+    this.app.store.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.app.store.run(
+        "INSERT INTO meta VALUES ('mcp-config',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        JSON.stringify(config),
+      );
+      this.app.store.run("DELETE FROM reads");
+      this.app.store.db.exec("COMMIT");
+    } catch (error) {
+      this.app.store.db.exec("ROLLBACK");
+      throw error;
+    }
+    const closeOld = gateway.replace(config);
+    await closeOld;
+    return this.mcp();
+  }
+  async discover(name: string) {
+    const tools = await this.gateway().discover(name);
+    return {
+      tools: tools.map(({ name, description, inputSchema }) => ({
+        name,
+        description: description ?? "",
+        inputSchema,
+      })),
+    };
+  }
+  snapshot() {
+    return {
+      mode: this.app.options.mode ?? "demo",
+      ...this.defaults(),
+      models: this.catalog(),
+      mcp: this.mcp(),
+    };
+  }
+}

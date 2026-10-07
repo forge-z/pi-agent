@@ -2031,3 +2031,450 @@ dialog .fine {
     min-height: 40px;
   }
 }
+
+/* Management stays in the same quiet, personal workspace. */
+.space-navigation {
+  display: grid;
+  gap: 3px;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  padding: 8px 0;
+  margin-bottom: 18px;
+}
+.space-navigation button {
+  justify-content: flex-start;
+  color: var(--ink);
+  background: transparent;
+  font-size: 0.76rem;
+  padding: 9px 10px;
+}
+.space-navigation button:hover {
+  background: var(--hover);
+  filter: none;
+}
+.space-navigation .nav-arrow {
+  width: 13px;
+  height: 13px;
+  margin-left: auto;
+  color: var(--muted);
+}
+.composer-identity #model-label {
+  background: transparent;
+  color: var(--muted);
+  border: 0;
+  border-left: 1px solid var(--line);
+  border-radius: 0;
+  min-height: 36px;
+  padding: 6px 8px;
+  margin-left: 7px;
+  font-weight: 400;
+  font-size: 0.66rem;
+  max-width: 270px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: block;
+}
+.composer-identity #model-label:hover {
+  color: var(--accent);
+  filter: none;
+}
+.management-dialog {
+  width: min(calc(100% - 32px), 780px);
+  padding: 36px 40px;
+}
+.management-dialog .management-intro {
+  margin-bottom: 24px;
+}
+.management-dialog > h2 {
+  margin-bottom: 10px;
+}
+.management-section {
+  border-top: 1px solid var(--line);
+  padding-top: 24px;
+  margin-top: 24px;
+}
+.section-heading {
+  display: flex;
+  align-items: flex-start;
+  gap: 13px;
+  margin-bottom: 20px;
+}
+.section-icon {
+  color: var(--accent);
+  background: var(--soft);
+  border-radius: 10px;
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  flex: none;
+}
+.section-heading h3,
+.list-heading h3 {
+  margin: 0 0 4px;
+  font-size: 1rem;
+  font-weight: 500;
+}
+.section-heading p {
+  margin: 0;
+  font-size: 0.78rem;
+}
+.management-form {
+  display: grid;
+  gap: 17px;
+}
+.form-grid,
+.tool-permissions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+}
+.form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  min-width: 0;
+}
+.form-field label {
+  color: var(--ink);
+  font-weight: 500;
+  font-size: 0.78rem;
+  margin: 0;
+}
+.form-field input,
+.form-field textarea,
+.form-field select {
+  width: 100%;
+  min-height: 44px;
+  margin: 0;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--ink);
+  border-radius: 8px;
+  padding: 11px 12px;
+  font-family: var(--sans);
+  font-size: 0.84rem;
+  line-height: 1.5;
+}
+.form-field select {
+  padding-right: 28px;
+}
+.form-field select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+}
+.form-field small,
+.discovery-heading small {
+  color: var(--muted);
+  font-size: 0.73rem;
+  line-height: 1.6;
+}
+.form-field input[readonly] {
+  color: var(--muted);
+  background: var(--soft);
+}
+.form-field textarea {
+  resize: vertical;
+}
+.form-actions,
+.card-buttons {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.form-actions {
+  margin-top: 2px;
+}
+.management-dialog .form-actions button,
+.management-dialog .card-buttons button {
+  font-size: 0.78rem;
+}
+.permission-note {
+  display: flex;
+  gap: 11px;
+  padding: 15px 17px;
+  background: var(--soft);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  margin: 0 0 20px;
+}
+.permission-note > .icon {
+  color: var(--accent);
+  flex: none;
+  margin-top: 2px;
+}
+.permission-note p {
+  font-size: 0.77rem;
+  line-height: 1.7;
+  margin: 0;
+}
+.form-feedback {
+  color: var(--success);
+  font-size: 0.79rem;
+  line-height: 1.7;
+}
+.form-feedback:empty,
+.management-form .error:empty {
+  display: none;
+}
+.management-list {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.management-card {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 19px;
+  background: var(--bg);
+}
+.management-card-heading {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+}
+.management-card-heading > .icon {
+  color: var(--accent);
+  flex: none;
+  margin-top: 2px;
+}
+.management-card-heading > div {
+  flex: 1;
+  min-width: 0;
+}
+.management-card h4 {
+  font-weight: 500;
+  font-size: 0.91rem;
+  margin: 0 0 5px;
+  overflow-wrap: anywhere;
+}
+.management-card p.endpoint-label {
+  font-size: 0.72rem;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.management-card p.card-meta {
+  font-size: 0.73rem;
+  margin: 10px 0;
+}
+.card-buttons {
+  margin-top: 14px;
+  gap: 8px;
+}
+.card-buttons button {
+  padding: 9px 12px;
+  border-color: var(--line);
+  background: var(--card);
+}
+.danger-button {
+  color: var(--danger) !important;
+  border-color: var(--danger) !important;
+}
+.management-empty {
+  border: 1px dashed var(--line-strong);
+  border-radius: 11px;
+  padding: 20px;
+  text-align: center;
+  font-size: 0.8rem !important;
+  margin: 0;
+}
+.editor-panel {
+  margin-top: 18px;
+  padding: 22px;
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  background: var(--bg);
+}
+.editor-panel > h4 {
+  margin: 0 0 2px;
+  font-size: 1rem;
+  font-weight: 500;
+}
+.tool-permissions h4 {
+  margin: 0;
+  font-size: 0.84rem;
+  font-weight: 500;
+}
+.tool-permissions p {
+  font-size: 0.73rem;
+  margin: 5px 0 13px;
+}
+.checkbox-line {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 0.78rem;
+  line-height: 1.6;
+  cursor: pointer;
+  min-height: 44px;
+  margin: 0;
+}
+.checkbox-line input {
+  width: 18px;
+  height: 18px;
+  min-height: 0;
+  padding: 0;
+  margin: 0;
+  accent-color: var(--primary);
+  flex: none;
+}
+.advanced-fields summary,
+.task-history summary,
+.tool-schema summary {
+  font-size: 0.76rem;
+  color: var(--muted);
+  cursor: pointer;
+  min-height: 28px;
+  line-height: 1.7;
+}
+.advanced-fields .form-field {
+  margin-top: 12px;
+}
+.discovery-heading {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+.discovery-heading button {
+  font-size: 0.76rem;
+  border-color: var(--line);
+}
+.discovered-tools {
+  display: grid;
+  gap: 10px;
+}
+.discovered-tools:empty {
+  display: none;
+}
+.discovered-tool {
+  display: flex;
+  gap: 15px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--card);
+  padding: 14px;
+}
+.tool-description {
+  min-width: 0;
+  flex: 1;
+}
+.tool-description strong {
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+}
+.tool-description p {
+  font-size: 0.73rem;
+  margin: 4px 0 8px;
+}
+.tool-description pre {
+  max-height: 200px;
+  overflow: auto;
+  font-size: 0.67rem;
+}
+.tool-choices {
+  display: flex;
+  flex-direction: column;
+}
+.tool-choices .checkbox-line {
+  min-height: 34px;
+}
+.list-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 24px 0 14px;
+}
+.list-heading button {
+  font-size: 0.75rem;
+}
+.task-state {
+  background: var(--soft);
+  padding: 5px 9px;
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 0.66rem;
+}
+.task-card .task-prompt {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 0.8rem;
+  margin-bottom: 15px;
+}
+.task-history {
+  border-top: 1px solid var(--line);
+  padding-top: 13px;
+  margin-top: 17px;
+}
+.task-history summary {
+  min-height: 32px;
+}
+.task-run {
+  border-top: 1px solid var(--line);
+  padding: 9px 0;
+}
+.task-run p {
+  margin: 0;
+  font-size: 0.74rem;
+}
+.management-dialog .error,
+#conversation-settings-error {
+  font-size: 0.8rem;
+  line-height: 1.7;
+}
+@media (max-height: 850px) and (min-width: 761px) {
+  .space-navigation {
+    margin-bottom: 12px;
+    padding: 4px 0;
+  }
+  .continuity-note {
+    display: none;
+  }
+}
+@media (max-width: 760px) {
+  .management-dialog {
+    padding: 28px 20px;
+    width: calc(100% - 20px);
+    max-height: calc(100dvh - 20px);
+  }
+  .form-grid,
+  .tool-permissions {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .editor-panel {
+    padding: 17px;
+  }
+  .management-card {
+    padding: 16px;
+  }
+  .discovered-tool {
+    flex-direction: column;
+    gap: 8px;
+  }
+  .tool-choices {
+    flex-direction: row;
+    gap: 20px;
+  }
+  .tool-choices .checkbox-line {
+    min-height: 44px;
+  }
+  .form-field input,
+  .form-field textarea,
+  .form-field select {
+    font-size: 1rem;
+  }
+  .management-dialog .form-actions button {
+    flex: 1;
+  }
+  .composer-identity #model-label {
+    font-size: 0.6rem;
+    max-width: min(170px, 37vw);
+    padding-left: 8px;
+    min-height: 44px;
+  }
+  .space-navigation {
+    margin-bottom: 14px;
+  }
+}

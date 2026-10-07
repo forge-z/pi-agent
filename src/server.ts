@@ -10,6 +10,9 @@ import type { Runtime } from "./runtime.js";
 import { hash, SqlCredentials } from "./store.js";
 import { ProviderLogin } from "./provider-login.js";
 import type { Telegram, TelegramUpdate } from "./telegram.js";
+import { Tasks, TaskError } from "./tasks.js";
+import { SettingsError } from "./settings.js";
+import { PolicyError } from "./mcp.js";
 export interface ServerOptions {
   password: string;
   origin: string;
@@ -60,6 +63,8 @@ const json = (response: ServerResponse, status: number, value: unknown) => {
 };
 export function createAppServer(app: Runtime, options: ServerOptions) {
   const login = new ProviderLogin(app.models, app.store);
+  const tasks = new Tasks(app);
+  tasks.start();
   const streams = new Set<ServerResponse>();
   const attempts = new Map<string, { count: number; until: number }>();
   const timer = options.telegram
@@ -163,13 +168,66 @@ export function createAppServer(app: Runtime, options: ServerOptions) {
           return json(response, 200, {
             mode: app.options.mode ?? "demo",
             provider: app.options.mode === "live" ? "openai" : "faux",
-            model:
-              app.options.modelId ??
-              (app.options.mode === "live" ? "gpt-6.1-sol" : "faux-1"),
+            model: app.settings.defaults().modelId,
+            effort: app.settings.defaults().effort,
             credentials:
               (await new SqlCredentials(app.store).read("openai"))?.type ??
               null,
           });
+        if (path === "/api/settings") {
+          if (method === "GET")
+            return json(response, 200, app.settings.snapshot());
+          if (method === "PUT")
+            return json(
+              response,
+              200,
+              app.settings.saveDefaults(await body(request)),
+            );
+        }
+        if (path === "/api/mcp") {
+          if (method === "GET") return json(response, 200, app.settings.mcp());
+          if (method === "PUT")
+            return json(
+              response,
+              200,
+              await app.settings.saveMcp((await body(request)).servers),
+            );
+        }
+        const mcp = /^\/api\/mcp\/([\w-]+)\/tools$/.exec(path);
+        if (mcp && method === "GET")
+          return json(response, 200, await app.settings.discover(mcp[1]));
+        if (path === "/api/tasks") {
+          if (method === "GET") return json(response, 200, tasks.list());
+          if (method === "POST")
+            return json(response, 201, await tasks.create(await body(request)));
+        }
+        const taskRoute = /^\/api\/tasks\/([a-f0-9-]+)(?:\/(run|runs))?$/.exec(
+          path,
+        );
+        if (taskRoute) {
+          const [, id, resource] = taskRoute;
+          if (!tasks.get(id)) throw new HttpError(404, "Tarefa não encontrada");
+          if (resource === "runs" && method === "GET")
+            return json(response, 200, tasks.runs(id));
+          if (resource === "run" && method === "POST") {
+            const input = await body(request);
+            return json(
+              response,
+              202,
+              await tasks.runNow(id, text(input.requestId)),
+            );
+          }
+          if (!resource && method === "PUT") {
+            const input = await body(request);
+            if (typeof input.enabled !== "boolean")
+              throw new HttpError(400, "Informe se a tarefa está ativa");
+            return json(response, 200, tasks.setEnabled(id, input.enabled));
+          }
+          if (!resource && method === "DELETE") {
+            tasks.remove(id);
+            return json(response, 200, { ok: true });
+          }
+        }
         if (path === "/api/conversations") {
           if (method === "GET")
             return json(
@@ -214,7 +272,7 @@ export function createAppServer(app: Runtime, options: ServerOptions) {
           }
         }
         const route =
-          /^\/api\/conversations\/([0-9]+)(?:\/(messages|events|link|actions)(?:\/([a-f0-9]{24}))?)?$/.exec(
+          /^\/api\/conversations\/([0-9]+)(?:\/(messages|events|link|actions|settings)(?:\/([a-f0-9]{24}))?)?$/.exec(
             path,
           );
         if (route) {
@@ -222,6 +280,12 @@ export function createAppServer(app: Runtime, options: ServerOptions) {
           await app.conversation(id);
           if (!resource && method === "GET")
             return json(response, 200, await app.snapshot(id));
+          if (resource === "settings" && method === "PUT")
+            return json(
+              response,
+              200,
+              await app.settings.saveConversation(id, await body(request)),
+            );
           if (resource === "messages" && method === "POST") {
             const input = await body(request);
             return json(
@@ -323,6 +387,7 @@ export function createAppServer(app: Runtime, options: ServerOptions) {
       const assets: Record<string, [string, string]> = {
         "/": ["index.html", "text/html"],
         "/app.js": ["app.js", "text/javascript"],
+        "/settings.js": ["settings.js", "text/javascript"],
         "/style.css": ["style.css", "text/css"],
         "/manifest.webmanifest": [
           "manifest.webmanifest",
@@ -369,13 +434,17 @@ export function createAppServer(app: Runtime, options: ServerOptions) {
       const status = error instanceof HttpError ? error.status : 400;
       json(response, status, {
         error:
-          error instanceof HttpError
+          error instanceof HttpError ||
+          error instanceof SettingsError ||
+          error instanceof TaskError ||
+          error instanceof PolicyError
             ? error.message
             : "Não foi possível processar a operação",
       });
     });
   });
   const close = async () => {
+    await tasks.close();
     if (timer) clearInterval(timer);
     login.close();
     await options.telegram?.drain();

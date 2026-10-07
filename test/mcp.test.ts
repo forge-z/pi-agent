@@ -36,6 +36,10 @@ test("real MCP SDK connects to local HTTP mock, exposes explicit allowlists, cal
     },
   ]);
   try {
+    const discovered = await gateway.discover("mock");
+    assert.ok(discovered.some((tool) => tool.name === "create"));
+    assert.equal(writes, 0);
+    assert.equal(reads, 0);
     const catalog = JSON.stringify(await gateway.catalog());
     assert.match(catalog, /lookup/);
     assert.match(catalog, /inputSchema/);

@@ -230,6 +230,24 @@
           Nenhuma conversa encontrada.
         </p>
         <div class="sidebar-bottom">
+          <nav class="space-navigation" aria-label="Gerenciar espaço">
+            <button id="tasks-button" type="button">
+              <svg class="icon" aria-hidden="true">
+                <use href="/icons.svg#calendar-blank" /></svg
+              ><span>Tarefas</span
+              ><svg class="icon nav-arrow" aria-hidden="true">
+                <use href="/icons.svg#caret-right" />
+              </svg>
+            </button>
+            <button id="settings-button" type="button">
+              <svg class="icon" aria-hidden="true">
+                <use href="/icons.svg#asterisk" /></svg
+              ><span>Configurações</span
+              ><svg class="icon nav-arrow" aria-hidden="true">
+                <use href="/icons.svg#caret-right" />
+              </svg>
+            </button>
+          </nav>
           <div class="continuity-note">
             <svg class="icon" aria-hidden="true">
               <use href="/icons.svg#chat-circle" />
@@ -427,7 +445,14 @@
                     alt=""
                     width="30"
                     height="30"
-                  />Pi<span id="model-label">Assistente pessoal</span></span
+                  />Pi<button
+                    id="model-label"
+                    type="button"
+                    aria-haspopup="dialog"
+                    title="Modelo e esforço desta conversa"
+                  >
+                    Assistente pessoal
+                  </button></span
                 ><span class="send-shortcut" aria-hidden="true"
                   >⌘ / Ctrl + Enter</span
                 ><button
@@ -500,6 +525,341 @@
         </div>
       </main>
     </div>
+    <dialog
+      id="settings-dialog"
+      class="management-dialog"
+      aria-labelledby="settings-title"
+    >
+      <form method="dialog">
+        <button
+          class="dialog-close icon-button"
+          aria-label="Fechar configurações"
+        >
+          <svg class="icon" aria-hidden="true"><use href="/icons.svg#x" /></svg>
+        </button>
+      </form>
+      <p class="eyebrow">DO SEU JEITO</p>
+      <h2 id="settings-title">Seu espaço, ajustado.</h2>
+      <p class="management-intro">
+        Escolha como o Pi pensa e quais ferramentas ele pode usar.
+      </p>
+      <p id="settings-error" class="error" role="alert"></p>
+      <p id="settings-feedback" class="form-feedback" role="status"></p>
+      <section class="management-section" aria-labelledby="defaults-title">
+        <div class="section-heading">
+          <span class="section-icon"
+            ><svg class="icon" aria-hidden="true">
+              <use href="/icons.svg#lightbulb" /></svg
+          ></span>
+          <div>
+            <h3 id="defaults-title">Novas conversas</h3>
+            <p>
+              Estas escolhas serão usadas nas próximas conversas que você criar.
+              A disponibilidade dos modelos do catálogo Pi pode variar conforme
+              sua conta.
+            </p>
+          </div>
+        </div>
+        <form id="defaults-form" class="management-form">
+          <div class="form-grid">
+            <div class="form-field">
+              <label for="default-model">Modelo</label
+              ><select id="default-model" required></select>
+            </div>
+            <div class="form-field">
+              <label for="default-effort">Esforço de raciocínio</label
+              ><select id="default-effort" required></select>
+            </div>
+          </div>
+          <div class="form-actions">
+            <button type="submit">Salvar padrão</button>
+          </div>
+        </form>
+      </section>
+      <section class="management-section" aria-labelledby="mcp-title">
+        <div class="section-heading">
+          <span class="section-icon"
+            ><svg class="icon" aria-hidden="true">
+              <use href="/icons.svg#plug" /></svg
+          ></span>
+          <div>
+            <h3 id="mcp-title">Servidores MCP</h3>
+            <p>Conecte ferramentas por um endpoint HTTPS Streamable HTTP.</p>
+          </div>
+        </div>
+        <div class="permission-note">
+          <svg class="icon" aria-hidden="true">
+            <use href="/icons.svg#shield-check" />
+          </svg>
+          <p>
+            Você escolhe as ferramentas permitidas. Leituras podem ocorrer
+            durante a conversa; ações de escrita sempre pedem sua confirmação.
+            Descobrir ferramentas não autoriza seu uso.
+          </p>
+        </div>
+        <div id="mcp-list" class="management-list" aria-live="polite"></div>
+        <button id="mcp-add" type="button" class="subtle">
+          <svg class="icon" aria-hidden="true">
+            <use href="/icons.svg#plus" /></svg
+          >Adicionar servidor
+        </button>
+        <form id="mcp-form" class="management-form editor-panel" hidden>
+          <h4 id="mcp-editor-title">Novo servidor</h4>
+          <div class="form-grid">
+            <div class="form-field">
+              <label for="mcp-name">Nome</label
+              ><input
+                id="mcp-name"
+                required
+                maxlength="80"
+                pattern="[a-zA-Z0-9_-]+"
+                aria-describedby="mcp-name-hint"
+                placeholder="meu-servico"
+              /><small id="mcp-name-hint"
+                >Use letras sem acentos, números, hífen ou sublinhado. O nome
+                identifica este servidor e permanece fixo após salvar.</small
+              >
+            </div>
+            <div class="form-field">
+              <label for="mcp-url">Endpoint HTTPS</label
+              ><input
+                id="mcp-url"
+                type="url"
+                required
+                placeholder="https://servico.example/mcp"
+              />
+            </div>
+          </div>
+          <div class="form-field">
+            <label for="mcp-token">Bearer token</label
+            ><input
+              id="mcp-token"
+              type="password"
+              autocomplete="new-password"
+              spellcheck="false"
+              aria-describedby="mcp-token-hint"
+            /><small id="mcp-token-hint"
+              >Opcional. O token salvo nunca é exibido aqui.</small
+            >
+          </div>
+          <label class="checkbox-line" id="mcp-remove-token-row" hidden
+            ><input id="mcp-remove-token" type="checkbox" />Remover token
+            salvo</label
+          >
+          <details id="mcp-token-file-details" class="advanced-fields" hidden>
+            <summary>Arquivo de token provisionado</summary>
+            <div class="form-field">
+              <label for="mcp-token-file">Caminho do arquivo</label
+              ><input
+                id="mcp-token-file"
+                readonly
+                autocomplete="off"
+                placeholder="/caminho/no/servidor/token"
+              /><small
+                >Este caminho foi configurado pelo operador do Pi. Para
+                alterá-lo, ajuste a configuração no servidor.</small
+              >
+            </div>
+          </details>
+          <div class="tool-permissions">
+            <div>
+              <h4>Ferramentas de leitura</h4>
+              <p>Podem consultar dados sem pedir aprovação.</p>
+              <div class="form-field">
+                <label for="mcp-read-tools"
+                  >Nomes permitidos, um por linha</label
+                ><textarea
+                  id="mcp-read-tools"
+                  rows="3"
+                  spellcheck="false"
+                  placeholder="search\nget_record"
+                ></textarea>
+              </div>
+            </div>
+            <div>
+              <h4>Ferramentas de ação</h4>
+              <p>Cada execução precisa de aprovação.</p>
+              <div class="form-field">
+                <label for="mcp-action-tools"
+                  >Nomes permitidos, um por linha</label
+                ><textarea
+                  id="mcp-action-tools"
+                  rows="3"
+                  spellcheck="false"
+                  placeholder="create_record\nupdate_record"
+                ></textarea>
+              </div>
+            </div>
+          </div>
+          <div class="discovery-heading">
+            <button id="mcp-discover" type="button" class="subtle">
+              <svg class="icon" aria-hidden="true">
+                <use href="/icons.svg#magnifying-glass" /></svg
+              >Descobrir ferramentas</button
+            ><small>Salve o endpoint antes de descobrir.</small>
+          </div>
+          <div id="mcp-tools" class="discovered-tools"></div>
+          <p id="mcp-editor-error" class="error" role="alert"></p>
+          <p id="mcp-editor-feedback" class="form-feedback" role="status"></p>
+          <div class="form-actions">
+            <button type="submit">Salvar servidor</button
+            ><button id="mcp-cancel" type="button" class="subtle">
+              Cancelar
+            </button>
+          </div>
+        </form>
+      </section>
+    </dialog>
+    <dialog
+      id="conversation-settings-dialog"
+      aria-labelledby="conversation-settings-title"
+    >
+      <form method="dialog">
+        <button
+          class="dialog-close icon-button"
+          aria-label="Fechar ajustes da conversa"
+        >
+          <svg class="icon" aria-hidden="true"><use href="/icons.svg#x" /></svg>
+        </button>
+      </form>
+      <span class="dialog-icon"
+        ><svg class="icon" aria-hidden="true">
+          <use href="/icons.svg#lightbulb" /></svg
+      ></span>
+      <p class="eyebrow">ESTA CONVERSA</p>
+      <h2 id="conversation-settings-title">Um jeito de pensar.</h2>
+      <p>
+        Escolha o modelo e o esforço para esta conversa. Para mudar o padrão de
+        novas conversas, abra Configurações.
+      </p>
+      <form id="conversation-settings-form" class="management-form">
+        <div class="form-field">
+          <label for="conversation-model">Modelo</label
+          ><select id="conversation-model" required></select>
+        </div>
+        <div class="form-field">
+          <label for="conversation-effort">Esforço de raciocínio</label
+          ><select id="conversation-effort" required></select>
+        </div>
+        <p id="conversation-settings-error" class="error" role="alert"></p>
+        <div class="form-actions">
+          <button type="submit">Aplicar à conversa</button>
+        </div>
+      </form>
+    </dialog>
+    <dialog
+      id="tasks-dialog"
+      class="management-dialog"
+      aria-labelledby="tasks-title"
+    >
+      <form method="dialog">
+        <button class="dialog-close icon-button" aria-label="Fechar tarefas">
+          <svg class="icon" aria-hidden="true"><use href="/icons.svg#x" /></svg>
+        </button>
+      </form>
+      <p class="eyebrow">UM PRÓXIMO PASSO, NO TEMPO CERTO</p>
+      <h2 id="tasks-title">Deixe combinado.</h2>
+      <p class="management-intro">
+        Agende um pedido para o Pi executar na conversa que você escolher.
+      </p>
+      <div class="permission-note">
+        <svg class="icon" aria-hidden="true">
+          <use href="/icons.svg#shield-check" />
+        </svg>
+        <p>
+          O resultado fica na conversa. Não há envio automático ao Telegram.
+          Ações de escrita continuam exigindo sua confirmação.
+        </p>
+      </div>
+      <p id="tasks-error" class="error" role="alert"></p>
+      <p id="tasks-feedback" class="form-feedback" role="status"></p>
+      <div class="list-heading">
+        <h3>Suas tarefas</h3>
+        <button id="tasks-refresh" type="button" class="subtle">
+          Atualizar
+        </button>
+      </div>
+      <div id="tasks-list" class="management-list" aria-live="polite"></div>
+      <section class="management-section" aria-labelledby="task-create-title">
+        <div class="section-heading">
+          <span class="section-icon"
+            ><svg class="icon" aria-hidden="true">
+              <use href="/icons.svg#plus" /></svg
+          ></span>
+          <div>
+            <h3 id="task-create-title">Nova tarefa</h3>
+            <p>Um pedido claro, uma conversa e um horário.</p>
+          </div>
+        </div>
+        <form id="task-form" class="management-form">
+          <div class="form-field">
+            <label for="task-title">Título</label
+            ><input
+              id="task-title"
+              required
+              maxlength="160"
+              placeholder="Resumo da semana"
+            />
+          </div>
+          <div class="form-field">
+            <label for="task-prompt">O que o Pi deve fazer?</label
+            ><textarea
+              id="task-prompt"
+              required
+              maxlength="32000"
+              rows="3"
+              placeholder="Resuma o que conversamos nesta semana e liste as próximas prioridades."
+            ></textarea>
+          </div>
+          <div class="form-field">
+            <label for="task-conversation">Conversa</label
+            ><select id="task-conversation" required></select>
+          </div>
+          <div class="form-grid">
+            <div class="form-field">
+              <label for="task-kind">Quando executar</label
+              ><select id="task-kind">
+                <option value="once">Uma vez</option>
+                <option value="cron">Repetir</option>
+              </select>
+            </div>
+            <div class="form-field">
+              <label for="task-timezone">Fuso horário</label
+              ><input
+                id="task-timezone"
+                required
+                value="America/Sao_Paulo"
+                aria-describedby="task-timezone-hint"
+              /><small id="task-timezone-hint"
+                >Use um fuso IANA, como America/Sao_Paulo.</small
+              >
+            </div>
+          </div>
+          <div id="task-once-field" class="form-field">
+            <label for="task-once">Data e horário</label
+            ><input id="task-once" type="datetime-local" required /><small
+              >O horário será interpretado no fuso escolhido acima.</small
+            >
+          </div>
+          <div id="task-cron-field" class="form-field" hidden>
+            <label for="task-cron">Agendamento cron</label
+            ><input
+              id="task-cron"
+              placeholder="0 9 * * 1-5"
+              spellcheck="false"
+              aria-describedby="task-cron-hint"
+            /><small id="task-cron-hint"
+              >Cinco campos: minuto, hora, dia do mês, mês e dia da semana.
+              Exemplo: 0 9 * * 1-5 = dias úteis às 9h.</small
+            >
+          </div>
+          <p id="task-form-error" class="error" role="alert"></p>
+          <div class="form-actions">
+            <button type="submit">Criar tarefa</button>
+          </div>
+        </form>
+      </section>
+    </dialog>
     <dialog id="link-dialog" aria-labelledby="link-title">
       <form method="dialog">
         <button class="dialog-close icon-button" aria-label="Fechar">

@@ -25,6 +25,7 @@ import {
 } from "./store.js";
 import { Actions } from "./actions.js";
 import type { ToolGateway } from "./mcp.js";
+import { Settings, SettingsError } from "./settings.js";
 
 export interface RuntimeOptions {
   dir: string;
@@ -38,6 +39,7 @@ export class Runtime {
   readonly store: Store;
   readonly actions: Actions;
   readonly models: MutableModels;
+  readonly settings: Settings;
   harness!: Harness;
   private release!: () => Promise<void>;
   private monitors = new Map<string, Promise<void>>();
@@ -74,6 +76,7 @@ export class Runtime {
         this.models.setProvider(faux.provider);
       }
     }
+    this.settings = new Settings(this);
   }
   static async open(options: RuntimeOptions) {
     // Lock before SQLite recovery; another owner must never mark live effects uncertain.
@@ -90,6 +93,7 @@ export class Runtime {
     try {
       app = new Runtime(options);
       app.release = release;
+      await app.settings.restoreMcp();
       const registry = createRegistry();
       const parameters = Type.Object({
         server: Type.String(),
@@ -206,18 +210,18 @@ export class Runtime {
               row.id,
               context,
             );
-            await conversation?.configure(
-              {
-                model: {
-                  provider: options.mode === "live" ? "openai" : "faux",
-                  modelId:
-                    options.mode === "live"
-                      ? (options.modelId ?? "gpt-6.1-sol")
-                      : "faux-1",
+            const agent = await conversation?.agent(context);
+            if (agent?.model?.provider !== app.settings.provider)
+              await conversation?.configure(
+                {
+                  model: {
+                    provider: app.settings.provider,
+                    modelId: app.settings.defaults().modelId,
+                  },
+                  thinkingLevel: app.settings.defaults().effort,
                 },
-              },
-              context,
-            );
+                context,
+              );
           }
         }
         cursor = recovered.next;
@@ -246,6 +250,7 @@ export class Runtime {
     }
   }
   async create(title = "Nova conversa") {
+    const defaults = this.settings.defaults();
     const conversation = await this.harness.createConversation(
       {
         ownership: { kind: "ownerless" },
@@ -254,11 +259,9 @@ export class Runtime {
             provider:
               this.options.provider ??
               (this.options.mode === "live" ? "openai" : "faux"),
-            modelId:
-              this.options.modelId ??
-              (this.options.mode === "live" ? "gpt-6.1-sol" : "faux-1"),
+            modelId: defaults.modelId,
           },
-          thinkingLevel: "high",
+          thinkingLevel: defaults.effort,
         },
       },
       context,
@@ -294,6 +297,20 @@ export class Runtime {
     )
       throw new Error("Mensagem ou requestId inválido");
     const conversation = await this.conversation(conversationId);
+    if (
+      this.options.mode === "live" &&
+      !this.options.models &&
+      source !== "system" &&
+      !this.store.get(
+        "SELECT 1 FROM requests WHERE conversationId=? AND requestId=?",
+        conversationId,
+        requestId,
+      ) &&
+      !(await this.models.checkAuth(this.settings.provider))
+    )
+      throw new SettingsError(
+        "Conecte sua conta ChatGPT antes de enviar mensagens ou executar tarefas",
+      );
     this.store.run(
       "INSERT OR IGNORE INTO requests(conversationId,requestId,text,source,chat) VALUES (?,?,?,?,?)",
       conversationId,
@@ -410,6 +427,7 @@ export class Runtime {
     const view = await conversation.viewState(context);
     try {
       return {
+        settings: await this.settings.conversation(id),
         view: view.value,
         actions: this.store.actions(id),
         deliveries: this.store.all(
