@@ -17,17 +17,17 @@ Para produção com Docker Compose ou Coolify, use [docs/deployment.md](docs/dep
 
 ## Configuração
 
-| Variável                                                  | Uso                                                                                                                                 |
-| --------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| `WEB_PASSWORD` / `WEB_PASSWORD_FILE`                      | Senha da interface, com no mínimo 12 caracteres. O arquivo tem precedência quando definido. Separe essa senha do login do provider. |
-| `APP_ORIGIN`                                              | Origem exata da interface (`scheme://host[:port]`); também protege requisições de escrita contra origem diferente.                  |
-| `COOKIE_SECURE`                                           | Defina `true` quando a interface estiver atrás de TLS.                                                                              |
-| `APP_MODE`                                                | `demo` por padrão; `live` ativa o provider OpenAI.                                                                                  |
-| `MODEL_ID`                                                | Modelo no modo live; padrão `gpt-6.1-sol`.                                                                                          |
-| `DATA_DIR`                                                | Diretório das bases SQLite; padrão `./data`.                                                                                        |
-| `MCP_CONFIG_FILE`                                         | Arquivo JSON opcional com servidores MCP HTTP(S). Veja [docs/mcp.example.json](docs/mcp.example.json).                              |
-| `TELEGRAM_BOT_TOKEN_FILE`, `TELEGRAM_WEBHOOK_SECRET_FILE` | Arquivos opcionais para habilitar Telegram. Exige também as allowlists de usuário e chat.                                           |
-| `TELEGRAM_ALLOWED_USERS`, `TELEGRAM_ALLOWED_CHATS`        | IDs separados por vírgula; ambos são exigidos quando o bot está ativo.                                                              |
+| Variável                                                            | Uso                                                                                                                                 |
+| ------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `WEB_PASSWORD` / `WEB_PASSWORD_FILE`                                | Senha da interface, com no mínimo 12 caracteres. O arquivo tem precedência quando definido. Separe essa senha do login do provider. |
+| `APP_ORIGIN`                                                        | Origem exata da interface (`scheme://host[:port]`); também protege requisições de escrita contra origem diferente.                  |
+| `COOKIE_SECURE`                                                     | Defina `true` quando a interface estiver atrás de TLS.                                                                              |
+| `APP_MODE`                                                          | `demo` por padrão; `live` ativa o provider OpenAI.                                                                                  |
+| `MODEL_ID`                                                          | Modelo no modo live; padrão `gpt-6.1-sol`.                                                                                          |
+| `DATA_DIR`                                                          | Diretório das bases SQLite; padrão `./data`.                                                                                        |
+| `MCP_CONFIG_FILE`                                                   | Arquivo JSON opcional com servidores MCP HTTP(S). Veja [docs/mcp.example.json](docs/mcp.example.json).                              |
+| `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET` / variantes `_FILE` | Segredos opcionais para habilitar Telegram, por variável ou arquivo. Exige também as allowlists de usuário e chat.                  |
+| `TELEGRAM_ALLOWED_USERS`, `TELEGRAM_ALLOWED_CHATS`                  | IDs separados por vírgula; ambos são exigidos quando o bot está ativo.                                                              |
 
 Use `npm run build` para compilar; `npm start` inicia `dist/src/main.js`. O runtime usa Pi Durable 1.0.4, Pi AI 1.0.4, SQLite integrado do Node e o SDK MCP por HTTP.
 

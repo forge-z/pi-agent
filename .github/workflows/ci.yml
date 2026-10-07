@@ -18,17 +18,31 @@ jobs:
       - run: npm test
       - name: Build container
         run: docker build -t pi-agent:test .
+      - name: Validate Compose with no runtime secrets during build
+        run: |
+          unset WEB_PASSWORD WEB_PASSWORD_SECRET_FILE TELEGRAM_BOT_TOKEN TELEGRAM_WEBHOOK_SECRET
+          APP_ORIGIN=https://pi.example.com docker compose config --quiet
       - name: Verify non-root, persistent data and health
         run: |
-          mkdir -p /tmp/pi-agent-ci
-          printf 'ci-test-password-only' > /tmp/pi-agent-ci/web-password
-          export APP_ORIGIN=http://localhost:3000 COOKIE_SECURE=false WEB_PASSWORD_SECRET_FILE=/tmp/pi-agent-ci/web-password
+          export APP_ORIGIN=http://localhost:3000 COOKIE_SECURE=false WEB_PASSWORD=ci-test-password-only
           docker compose config --quiet
           docker compose up -d --build --wait --wait-timeout 90
           test "$(docker compose exec -T pi-agent id -u)" = "1000"
           docker compose exec -T pi-agent node -e "fetch('http://127.0.0.1:3000/healthz').then(r=>process.exit(r.ok?0:1))"
+          docker compose exec -T pi-agent node -e "fetch('http://127.0.0.1:3000/api/login',{method:'POST',headers:{'Content-Type':'application/json',Origin:process.env.APP_ORIGIN},body:JSON.stringify({password:process.env.WEB_PASSWORD})}).then(r=>process.exit(r.ok?0:1))"
           docker compose exec -T pi-agent node -e "require('node:fs').writeFileSync('/app/data/ci-marker','persisted')"
           docker compose down
           docker compose up -d --wait --wait-timeout 90
           docker compose exec -T pi-agent node -e "if(require('node:fs').readFileSync('/app/data/ci-marker','utf8')!=='persisted') process.exit(1)"
           docker compose down -v
+      - name: Verify optional file secret configuration
+        run: |
+          mkdir -p /tmp/pi-agent-ci
+          printf 'ci-file-password-only' > /tmp/pi-agent-ci/web-password
+          chmod 600 /tmp/pi-agent-ci/web-password
+          sudo chown 1000:1000 /tmp/pi-agent-ci/web-password
+          export APP_ORIGIN=http://localhost:3000 COOKIE_SECURE=false WEB_PASSWORD_SECRET_FILE=/tmp/pi-agent-ci/web-password
+          docker compose -f docker-compose.yml -f docker-compose.secrets.yml config --quiet
+          docker compose -f docker-compose.yml -f docker-compose.secrets.yml up -d --wait --wait-timeout 90
+          docker compose -f docker-compose.yml -f docker-compose.secrets.yml exec -T pi-agent node -e "fetch('http://127.0.0.1:3000/api/login',{method:'POST',headers:{'Content-Type':'application/json',Origin:process.env.APP_ORIGIN},body:JSON.stringify({password:require('node:fs').readFileSync(process.env.WEB_PASSWORD_FILE,'utf8')})}).then(r=>process.exit(r.ok?0:1))"
+          docker compose -f docker-compose.yml -f docker-compose.secrets.yml down -v

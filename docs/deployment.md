@@ -5,9 +5,19 @@ O serviço é publicado como uma única instância Docker Compose, inclusive no 
 ## Preparar
 
 1. Instale Docker Engine com Docker Compose v2, ou conecte o repositório ao Coolify como serviço Docker Compose. Configure o diretório do arquivo Compose como raiz do projeto e a porta interna do serviço como `3000`.
-2. Copie `.env.example` para `.env`. Defina `APP_ORIGIN` com a origem HTTPS pública exata, sem caminho, e mantenha `COOKIE_SECURE=true` atrás de TLS. Escolha `APP_MODE=demo` ou `APP_MODE=live`.
-3. Crie um arquivo de senha web no host, legível pelo UID 1000 do contêiner, com uma senha longa escolhida pelo operador. Defina `WEB_PASSWORD_SECRET_FILE` no `.env` para seu caminho absoluto. O repositório não gera nem inclui credenciais. Em secrets baseados em arquivo, o Compose preserva as permissões de origem; não conte com `uid/gid/mode` para remapeá-las. Provisione o arquivo para o UID 1000 (ou use o mecanismo de secrets do host/Coolify), sem tornar credenciais legíveis para todos. Veja a [documentação de secrets do Compose](https://docs.docker.com/reference/compose-file/services/#secrets).
-4. Inicie com `docker compose up -d --build`. No Coolify, faça o deploy do serviço após informar as mesmas variáveis e disponibilizar o arquivo de senha no host.
+2. No Docker local, copie `.env.example` para `.env`. No Coolify, informe as variáveis em **Environment Variables** após carregar o Compose do repositório. Defina `APP_ORIGIN` com a origem HTTPS pública exata, sem caminho, e mantenha `COOKIE_SECURE=true` atrás de TLS. Escolha `APP_MODE=demo` ou `APP_MODE=live`.
+3. Defina `WEB_PASSWORD` com uma senha longa escolhida pelo operador (mínimo de 12 caracteres). No Coolify, habilite **Runtime / Available in the container** e desabilite **Build time / Available during build** para essa senha e para os segredos Telegram. Se o valor contiver `$`, configure **Interpolation / Literal**. O repositório não gera nem inclui credenciais; o `.env` está ignorado pelo Git. Veja a [documentação de variáveis do Coolify](https://coolify.io/docs/applications/configuration/environment-variables).
+4. Inicie com `docker compose up -d --build`, ou execute o deploy no Coolify após salvar as variáveis. O build não exige a senha; o serviço recusa iniciar quando ela está vazia ou tem menos de 12 caracteres.
+
+### Atualizar a configuração anterior no Coolify
+
+Use a branch `main` e o arquivo `docker-compose.yml`. Recarregue a definição Compose do repositório para que `WEB_PASSWORD` apareça nas variáveis, informe seu valor em runtime e remova `WEB_PASSWORD_SECRET_FILE` se não usar a alternativa abaixo. Salve e faça um novo deploy. A definição padrão não exige arquivos de secrets no servidor nem no contêiner auxiliar de build.
+
+### Alternativa com arquivos de secrets
+
+Para um host onde os arquivos já estejam provisionados, use explicitamente `docker compose -f docker-compose.yml -f docker-compose.secrets.yml up -d --build`. Defina `WEB_PASSWORD_SECRET_FILE` como caminho absoluto do arquivo no host, legível pelo UID 1000 do contêiner. O override deixa `WEB_PASSWORD` vazio e define `WEB_PASSWORD_FILE`; o arquivo tem precedência. Em secrets baseados em arquivo, o Compose preserva as permissões de origem; não conte com `uid/gid/mode` para remapeá-las. Provisione o arquivo para o UID 1000, sem tornar credenciais legíveis para todos. Veja a [documentação de secrets do Compose](https://docs.docker.com/reference/compose-file/services/#secrets).
+
+Essa alternativa precisa disponibilizar os arquivos em todo ambiente que executar os comandos Compose, inclusive qualquer contêiner auxiliar de deploy. Para o Coolify, a configuração padrão por variáveis evita essa dependência.
 
 O Compose mantém as bases SQLite e as credenciais do provider dentro de app.sqlite em `pi_agent_data`, montado em `/app/data`. O volume deve persistir entre recriações do contêiner. Execute apenas uma réplica: a aplicação mantém estado local e não coordena gravações entre instâncias.
 
@@ -19,7 +29,7 @@ O contêiner escuta na porta `3000` apenas na rede Compose; encaminhe o domínio
 
 `APP_MODE=live` habilita o provedor OpenAI. A autenticação do provedor ChatGPT é independente da senha web: conclua o OAuth interativamente na aplicação. Se o callback não puder ser aberto, use o prompt manual de URL de callback completa apresentado pela aplicação e conclua a troca no mesmo ambiente onde o serviço roda.
 
-Telegram é opcional. Crie os arquivos do token do bot e do segredo do webhook no host. Em `.env`, informe `TELEGRAM_BOT_TOKEN_SECRET_FILE` e `TELEGRAM_WEBHOOK_SECRET_FILE`; depois descomente os dois arquivos de segredo, os mounts de segredo e as variáveis `TELEGRAM_*_FILE` no `docker-compose.yml`. Defina `TELEGRAM_ALLOWED_USERS` e `TELEGRAM_ALLOWED_CHATS` como listas separadas por vírgula, limitadas aos IDs autorizados.
+Telegram é opcional. Informe `TELEGRAM_BOT_TOKEN` e `TELEGRAM_WEBHOOK_SECRET` como variáveis de runtime, além de `TELEGRAM_ALLOWED_USERS` e `TELEGRAM_ALLOWED_CHATS` como listas separadas por vírgula, limitadas aos IDs autorizados. Sem token, o transporte fica desabilitado. Para a alternativa por arquivos, configure `TELEGRAM_BOT_TOKEN_SECRET_FILE` e `TELEGRAM_WEBHOOK_SECRET_FILE` e descomente os blocos correspondentes em `docker-compose.secrets.yml`.
 
 MCP também é opcional e aceita endpoints HTTPS via Streamable HTTP; HTTP só é aceito em loopback para testes locais. Revise `mcp.json`, monte-o em `/app/config/mcp.json` como somente leitura e defina `MCP_CONFIG_FILE=/app/config/mcp.json`. Não monte sockets, diretórios amplos ou credenciais administrativas.
 

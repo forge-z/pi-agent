@@ -14,18 +14,13 @@ services:
       MODEL_ID: ${MODEL_ID:-gpt-6.1-sol}
       APP_ORIGIN: ${APP_ORIGIN:?Defina APP_ORIGIN como a origem HTTPS publica}
       COOKIE_SECURE: ${COOKIE_SECURE:-true}
-      WEB_PASSWORD_FILE: /run/secrets/web_password
+      # Senha de runtime: o build não precisa dela. A aplicação recusa senha vazia/curta.
+      WEB_PASSWORD: ${WEB_PASSWORD:-}
       MCP_CONFIG_FILE: ${MCP_CONFIG_FILE:-}
-      # Ative quando provisionar os arquivos do bot no host:
-      # TELEGRAM_BOT_TOKEN_FILE: /run/secrets/telegram_bot_token
-      # TELEGRAM_WEBHOOK_SECRET_FILE: /run/secrets/telegram_webhook_secret
-      # TELEGRAM_ALLOWED_USERS: ${TELEGRAM_ALLOWED_USERS:-}
-      # TELEGRAM_ALLOWED_CHATS: ${TELEGRAM_ALLOWED_CHATS:-}
-    secrets:
-      - web_password
-      # Descomente ao ativar o Telegram:
-      # - telegram_bot_token
-      # - telegram_webhook_secret
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_WEBHOOK_SECRET: ${TELEGRAM_WEBHOOK_SECRET:-}
+      TELEGRAM_ALLOWED_USERS: ${TELEGRAM_ALLOWED_USERS:-}
+      TELEGRAM_ALLOWED_CHATS: ${TELEGRAM_ALLOWED_CHATS:-}
     volumes:
       - pi_agent_data:/app/data
       # Se usar MCP, monte uma configuração revisada e somente leitura:
@@ -51,12 +46,3 @@ services:
 
 volumes:
   pi_agent_data:
-
-secrets:
-  web_password:
-    file: ${WEB_PASSWORD_SECRET_FILE:?Defina WEB_PASSWORD_SECRET_FILE em .env para um arquivo criado por voce}
-  # Descomente os blocos correspondentes ao ativar o Telegram:
-  # telegram_bot_token:
-  #   file: ${TELEGRAM_BOT_TOKEN_SECRET_FILE:?Defina o arquivo do token do bot}
-  # telegram_webhook_secret:
-  #   file: ${TELEGRAM_WEBHOOK_SECRET_FILE:?Defina o arquivo do segredo do webhook}
