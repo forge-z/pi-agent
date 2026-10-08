@@ -416,7 +416,7 @@ test("manual client keys deduplicate after completion and when joining another p
   }
 });
 
-test("actual Runtime admits a task into the conversation with no automatic Telegram delivery", async () => {
+test("actual Runtime keeps a task result on the web when only a legacy mapping exists without an active Telegram connection", async () => {
   const dir = await temp();
   const app = await Runtime.open({ dir, gateway });
   let now = epoch;

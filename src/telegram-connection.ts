@@ -571,6 +571,7 @@ export class TelegramConnection {
           config.chatId ? [config.chatId] : [],
           bot.username,
           true,
+          bot.id,
         );
         this.engine = engine;
         this.flushTimer = setInterval(() => {

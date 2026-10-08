@@ -36,6 +36,7 @@ import {
 import { McpCalls, type McpCall } from "./mcp-calls.js";
 import { Settings, SettingsError } from "./settings.js";
 import { Tasks, TaskError } from "./tasks.js";
+import { queueTaskTelegram } from "./task-telegram.js";
 import {
   Commands,
   CommandError,
@@ -552,32 +553,55 @@ export class Runtime {
       const monitor = (async () => {
         const settled = await submission.wait(context);
         if (this.closing) return;
-        if (settled.status === "done" && settled.type === "input" && chat) {
+        let answer = "";
+        if (
+          settled.status === "done" &&
+          settled.type === "input" &&
+          (chat || source === "task")
+        ) {
           const entries = await conversation.entries(
-            {},
-            1000,
+            { minEntryId: settled.answer, maxEntryId: settled.answer },
+            1,
             undefined,
             context,
           );
           const entry = entries.items.find((e) => e.id === settled.answer);
           const message = entry?.model?.[0];
-          const answer =
+          answer =
             message?.role === "assistant"
               ? message.content
                   .filter((c) => c.type === "text")
                   .map((c) => c.text)
                   .join("\n")
               : "";
-          if (answer) {
+          if (answer && chat) {
             this.store.queueTelegram(key, chat, answer);
           }
         }
-        this.store.run(
-          "UPDATE requests SET status=? WHERE conversationId=? AND requestId=?",
-          settled.status,
-          conversationId,
-          requestId,
-        );
+        this.store.db.exec("SAVEPOINT request_settlement");
+        try {
+          if (source === "task")
+            queueTaskTelegram(
+              this.store,
+              conversationId,
+              requestId,
+              settled.status === "done"
+                ? answer ||
+                    "Tarefa concluída sem resposta de texto. Consulte a conversa na web."
+                : "A tarefa não foi concluída. Consulte seu estado na conversa web.",
+            );
+          this.store.run(
+            "UPDATE requests SET status=? WHERE conversationId=? AND requestId=?",
+            settled.status,
+            conversationId,
+            requestId,
+          );
+          this.store.db.exec("RELEASE SAVEPOINT request_settlement");
+        } catch (error) {
+          this.store.db.exec("ROLLBACK TO SAVEPOINT request_settlement");
+          this.store.db.exec("RELEASE SAVEPOINT request_settlement");
+          throw error;
+        }
       })()
         .catch(() => {})
         .finally(() => this.monitors.delete(key));
