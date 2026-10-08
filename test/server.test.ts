@@ -41,6 +41,16 @@ test("web auth separate from provider, origin gate, idempotent admission, SSE sn
   try {
     assert.equal((await request("/healthz")).status, 200);
     assert.equal((await request("/manifest.webmanifest")).status, 200);
+    for (const asset of ["/markdown.js", "/marked.js"]) {
+      const response = await request(asset);
+      assert.equal(response.status, 200);
+      assert.match(response.headers.get("content-type")!, /javascript/);
+      assert.ok((await response.text()).length > 100);
+    }
+    assert.equal(
+      (await request("/node_modules/marked/package.json")).status,
+      404,
+    );
     assert.equal((await request("/api/conversations")).status, 401);
     assert.equal(
       (

@@ -82,3 +82,21 @@ Verificação em 8 de outubro de 2026, Node.js 26.0.0 no macOS; o container cont
 ![Tema Pi escuro no desktop](evidence/pi-theme/desktop-dark.jpg)
 
 ![Tema Pi escuro no celular](evidence/pi-theme/mobile-dark.jpg)
+
+## Tarefas pelo chat e Markdown
+
+Verificação local em 8 de outubro de 2026, na branch `fix/chat-tasks-markdown`.
+
+- Causa de agenda: o servidor HTTP instanciava o agendador, mas `personal-assistant` não registrava ferramentas de tarefas. O teste inicial confirmou `tasks_create` ausente do agente. O runtime agora possui o agendador compartilhado e registra `tasks_list` e `tasks_create` sem depender de configuração MCP ou habilitação por conversa.
+- **66 testes passaram**, zero fail/skip, em 32,65 segundos. Incluem chamadas pelo provider faux, cron às 8h em `America/Sao_Paulo`, resultados com ID persistido, reabertura, MCP direct e refresh, bloqueio de criação em entradas task/system, validação de fuso/cron, criação concorrente idempotente, recibos e rollback. O novo teste SIGKILL mata o processo após o commit da tarefa e antes do resultado da ferramenta: o replay retorna a tarefa original mesmo depois de expirar sua data única.
+- Causa de formatação: histórico e texto parcial usavam `textContent`, exibindo Markdown literalmente. Os dois caminhos agora usam o mesmo lexer Marked e renderer DOM. Testes cobrem parágrafos, títulos, negrito, listas aninhadas, código, links e sintaxe parcial; HTML bruto vira texto, imagens não carregam e URLs executáveis/credenciadas são rejeitadas. O teste HTTP verifica os dois módulos ESM permitidos e rejeita acesso genérico a node_modules.
+- Na prévia isolada com provider mock: respostas parciais e histórico após reload tinham elementos de título, listas, negrito e código. Código inline permaneceu inline, sem caixa duplicada no bloco de código. A agenda criada pelo chat apareceu no painel **Tarefas** com cron e fuso corretos. Desktop 1280×720 e celular 375×812 não tiveram overflow horizontal; console sem erros. A prévia usou somente dados temporários, sem conta real, MCP externo ou envio Telegram.
+- O anexo `image(5).png` não pôde ser inspecionado: duas tentativas de download pela Library devolveram HTTP 403. Nenhuma conclusão visual sobre esse anexo foi usada; a reprodução e as capturas abaixo são da prévia local.
+- A exigência de intenção explícita para agendar consta nas instruções ao modelo; o backend valida a origem da entrada ativa, esquema, cron e fuso. Ele não faz análise semântica do pedido humano. Permissões MCP e aprovações de efeitos externos continuam inalteradas. O recibo de criação cobre chamadas duráveis do chat; o formulário HTTP anterior ainda não fornece uma chave de retry de criação.
+- Esta correção foi preparada localmente; não houve push, merge ou deploy. Contas e serviços reais não foram usados para a validação, e o build de container deste lote não foi executado nesta máquina.
+
+![Markdown no desktop](evidence/chat-fixes/markdown-dark.jpg)
+
+![Markdown no celular](evidence/chat-fixes/markdown-mobile.jpg)
+
+![Tarefa criada pelo chat no painel](evidence/chat-fixes/task-from-chat.jpg)

@@ -58,7 +58,7 @@ function composer() {
   );
   // Load the real application handlers, substituting only the browser environment.
   runInNewContext(
-    source.replace(/^import[^\n]+\n/, "") + '\nconversationId = "2";',
+    source.replace(/^import[^\n]+\n/gm, "") + '\nconversationId = "2";',
     {
       document: {
         getElementById: element,

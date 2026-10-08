@@ -1,4 +1,5 @@
 import { configureUI } from "/settings.js";
+import { renderMarkdown } from "/markdown.js";
 
 const $ = (id) => document.getElementById(id);
 let conversationId = null;
@@ -279,7 +280,10 @@ function render(snapshot) {
               : `Ferramenta · ${message.toolName}`,
         ),
       );
-      article.append(speaker, node("div", blocks, "message-body"));
+      const body = node("div", undefined, "message-body");
+      if (message.role === "user") body.textContent = blocks;
+      else body.append(renderMarkdown(blocks));
+      article.append(speaker, body);
       messages.push(article);
     }
   const live = snapshot.view.docs["pi.live"];
@@ -288,17 +292,16 @@ function render(snapshot) {
     const article = node("article", undefined, "message assistant live");
     const speaker = node("span", undefined, "speaker");
     speaker.append(piMark(), node("span", "Pi está escrevendo"));
-    article.append(
-      speaker,
-      node(
-        "div",
+    const body = node("div", undefined, "message-body");
+    body.append(
+      renderMarkdown(
         partial.content
           .filter((c) => c.type === "text")
           .map((c) => c.text)
           .join(""),
-        "message-body",
       ),
     );
+    article.append(speaker, body);
     messages.push(article);
   }
   const empty = messages.length === 0 && snapshot.actions.length === 0;

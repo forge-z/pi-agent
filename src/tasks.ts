@@ -118,6 +118,7 @@ export class Tasks {
       );
       CREATE UNIQUE INDEX IF NOT EXISTS task_pending ON task_runs(taskId) WHERE state='pending';
       CREATE TABLE IF NOT EXISTS task_run_keys(requestId TEXT PRIMARY KEY, runId TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS task_creations(creationKey TEXT PRIMARY KEY, taskId TEXT NOT NULL, input TEXT NOT NULL);
     `);
   }
   list(): Task[] {
@@ -144,7 +145,7 @@ export class Tasks {
     this.tail = result.catch(() => {});
     return result;
   }
-  create(input: unknown): Promise<Task> {
+  create(input: unknown, creationKey?: string): Promise<Task> {
     return this.serialize(async () => {
       if (!input || typeof input !== "object" || Array.isArray(input))
         throw new TaskError("Tarefa inválida");
@@ -168,6 +169,36 @@ export class Tasks {
         throw new TaskError("Tipo de tarefa inválido");
       if (data.enabled !== undefined && typeof data.enabled !== "boolean")
         throw new TaskError("enabled deve ser booleano");
+      // The receipt and schedule commit together, before a replay-safe tool returns.
+      // Resolve a receipt before checking the current time or quota: a once schedule
+      // may already be in the past when its interrupted tool is resumed.
+      const signature = JSON.stringify({
+        title,
+        prompt,
+        kind: data.kind,
+        schedule,
+        timezone,
+        enabled: data.enabled !== false,
+        conversationId: data.conversationId ?? null,
+      });
+      if (creationKey !== undefined) {
+        if (!/^[\w:.-]{1,160}$/.test(creationKey))
+          throw new TaskError("Chave de criação inválida");
+        const receipt = this.runtime.store.get<{
+          taskId: string;
+          input: string;
+        }>(
+          "SELECT taskId,input FROM task_creations WHERE creationKey=?",
+          creationKey,
+        );
+        if (receipt) {
+          if (receipt.input !== signature)
+            throw new TaskError(
+              "Chave de criação já utilizada com conteúdo diferente",
+            );
+          return this.require(receipt.taskId);
+        }
+      }
       const nextRun =
         data.kind === "once"
           ? onceDate(schedule, this.clock())
@@ -180,18 +211,32 @@ export class Tasks {
         await this.runtime.conversation(conversationId);
       } else conversationId = await this.runtime.create(title);
       const id = randomUUID();
-      this.runtime.store.run(
-        "INSERT INTO tasks(id,title,prompt,conversationId,kind,schedule,timezone,enabled,nextRun) VALUES (?,?,?,?,?,?,?,?,?)",
-        id,
-        title,
-        prompt,
-        conversationId,
-        data.kind,
-        schedule,
-        timezone,
-        data.enabled === false ? 0 : 1,
-        data.enabled === false ? null : nextRun,
-      );
+      this.runtime.store.db.exec("BEGIN IMMEDIATE");
+      try {
+        this.runtime.store.run(
+          "INSERT INTO tasks(id,title,prompt,conversationId,kind,schedule,timezone,enabled,nextRun) VALUES (?,?,?,?,?,?,?,?,?)",
+          id,
+          title,
+          prompt,
+          conversationId,
+          data.kind,
+          schedule,
+          timezone,
+          data.enabled === false ? 0 : 1,
+          data.enabled === false ? null : nextRun,
+        );
+        if (creationKey !== undefined)
+          this.runtime.store.run(
+            "INSERT INTO task_creations VALUES (?,?,?)",
+            creationKey,
+            id,
+            signature,
+          );
+        this.runtime.store.db.exec("COMMIT");
+      } catch (error) {
+        this.runtime.store.db.exec("ROLLBACK");
+        throw error;
+      }
       return this.require(id);
     });
   }

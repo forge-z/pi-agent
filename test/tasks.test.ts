@@ -102,6 +102,64 @@ async function settle(app: Runtime, conversationId: string) {
   assert.fail("Runtime monitor did not settle the input");
 }
 
+test("creation receipts deduplicate concurrent calls and survive restart even after a once date expires", async () => {
+  const f = await fixture();
+  let reopened: Tasks | undefined;
+  try {
+    const input = { ...once, conversationId: await f.runtime.create() };
+    const [a, b] = await Promise.all([
+      f.tasks.create(input, "chat:create:1"),
+      f.tasks.create(input, "chat:create:1"),
+    ]);
+    assert.equal(a.id, b.id);
+    assert.equal(f.tasks.list().length, 1);
+    await f.tasks.close();
+    reopened = new Tasks(f.runtime as unknown as Runtime, () => epoch + 60000);
+    assert.equal((await reopened.create(input, "chat:create:1")).id, a.id);
+    await assert.rejects(
+      reopened.create({ ...input, prompt: "Different" }, "chat:create:1"),
+      /conteúdo diferente/,
+    );
+    reopened.remove(a.id);
+    await assert.rejects(
+      reopened.create(input, "chat:create:1"),
+      /não encontrada/,
+    );
+    assert.equal(
+      reopened.list().length,
+      0,
+      "a replay must not resurrect a deleted schedule",
+    );
+  } finally {
+    await reopened?.close();
+    await f.close();
+  }
+});
+
+test("schedule and creation receipt roll back together on a receipt storage failure", async () => {
+  const f = await fixture();
+  try {
+    const conversationId = await f.runtime.create();
+    f.store.db.exec(
+      "CREATE TRIGGER receipt_failure BEFORE INSERT ON task_creations BEGIN SELECT RAISE(ABORT, 'receipt failure'); END;",
+    );
+    await assert.rejects(
+      f.tasks.create({ ...once, conversationId }, "chat:create:failed"),
+      /receipt failure/,
+    );
+    assert.equal(f.tasks.list().length, 0);
+    assert.equal(f.store.all("SELECT * FROM task_creations").length, 0);
+    f.store.db.exec("DROP TRIGGER receipt_failure");
+    const task = await f.tasks.create(
+      { ...once, conversationId },
+      "chat:create:failed",
+    );
+    assert.equal(f.tasks.list()[0].id, task.id);
+  } finally {
+    await f.close();
+  }
+});
+
 test("once admission is atomic, concurrent ticks deduplicate and done follows request completion", async () => {
   const f = await fixture();
   try {

@@ -6,11 +6,12 @@ import {
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { Runtime } from "./runtime.js";
 import { hash, SqlCredentials } from "./store.js";
 import { ProviderLogin } from "./provider-login.js";
 import type { Telegram, TelegramUpdate } from "./telegram.js";
-import { Tasks, TaskError } from "./tasks.js";
+import { TaskError } from "./tasks.js";
 import { SettingsError } from "./settings.js";
 import { PolicyError, McpError } from "./mcp.js";
 export interface ServerOptions {
@@ -63,7 +64,7 @@ const json = (response: ServerResponse, status: number, value: unknown) => {
 };
 export function createAppServer(app: Runtime, options: ServerOptions) {
   const login = new ProviderLogin(app.models, app.store);
-  const tasks = new Tasks(app);
+  const tasks = app.tasks;
   tasks.start();
   const streams = new Set<ServerResponse>();
   const attempts = new Map<string, { count: number; until: number }>();
@@ -435,6 +436,11 @@ export function createAppServer(app: Runtime, options: ServerOptions) {
       const assets: Record<string, [string, string]> = {
         "/": ["index.html", "text/html"],
         "/app.js": ["app.js", "text/javascript"],
+        "/markdown.js": ["markdown.js", "text/javascript"],
+        "/marked.js": [
+          fileURLToPath(import.meta.resolve("marked")),
+          "text/javascript",
+        ],
         "/settings.js": ["settings.js", "text/javascript"],
         "/style.css": ["style.css", "text/css"],
         "/manifest.webmanifest": [
@@ -470,7 +476,9 @@ export function createAppServer(app: Runtime, options: ServerOptions) {
       const asset = assets[path];
       if (!asset) throw new HttpError(404, "Página não encontrada");
       const bytes = await readFile(
-        resolve(options.publicDir ?? "public", asset[0]),
+        path === "/marked.js"
+          ? asset[0]
+          : resolve(options.publicDir ?? "public", asset[0]),
       );
       response.writeHead(200, { "content-type": `${asset[1]}; charset=utf-8` });
       response.end(bytes);
