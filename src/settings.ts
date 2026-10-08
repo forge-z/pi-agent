@@ -84,7 +84,12 @@ export class Settings {
   async saveConversation(id: string, value: Record<string, unknown>) {
     const settings = this.validate(value);
     const conversation = await this.app.conversation(id);
+    const active = await this.app.harness.inspect(context);
     if (
+      active.tasks.some(
+        ({ record }) =>
+          String(record.conversationId) === id && !record.background,
+      ) ||
       this.app.store.get(
         "SELECT 1 FROM requests WHERE conversationId=? AND status='pending'",
         id,

@@ -13,6 +13,7 @@ import { ProviderLogin } from "./provider-login.js";
 import type { Telegram, TelegramUpdate } from "./telegram.js";
 import { TaskError } from "./tasks.js";
 import { SettingsError } from "./settings.js";
+import { commandCatalog, CommandError } from "./commands.js";
 import { PolicyError, McpError } from "./mcp.js";
 export interface ServerOptions {
   password: string;
@@ -320,6 +321,28 @@ export function createAppServer(app: Runtime, options: ServerOptions) {
             ),
           );
         }
+        if (path === "/api/commands" && method === "GET")
+          return json(response, 200, { commands: commandCatalog });
+        if (path === "/api/commands/tasks" && method === "GET")
+          return json(
+            response,
+            200,
+            await app.commands.active({ source: "web" }),
+          );
+        const commandStatus =
+          /^\/api\/conversations\/([0-9]+)\/commands\/([\w:.-]{1,160})$/.exec(
+            path,
+          );
+        if (commandStatus && method === "GET") {
+          const receipt = await app.commands.receipt(
+            commandStatus[1],
+            commandStatus[2],
+            { source: "web" },
+          );
+          if (!receipt)
+            throw new HttpError(404, "Recibo de comando não encontrado");
+          return json(response, 200, receipt);
+        }
         const route =
           /^\/api\/conversations\/([0-9]+)(?:\/(messages|events|link|actions|settings)(?:\/([a-f0-9]{24}))?)?$/.exec(
             path,
@@ -340,7 +363,9 @@ export function createAppServer(app: Runtime, options: ServerOptions) {
             return json(
               response,
               202,
-              await app.submit(id, text(input.requestId), text(input.text)),
+              await app.admit(id, text(input.requestId), text(input.text), {
+                source: "web",
+              }),
             );
           }
           if (resource === "link" && method === "POST")
@@ -436,6 +461,7 @@ export function createAppServer(app: Runtime, options: ServerOptions) {
       const assets: Record<string, [string, string]> = {
         "/": ["index.html", "text/html"],
         "/app.js": ["app.js", "text/javascript"],
+        "/commands.js": ["commands.js", "text/javascript"],
         "/markdown.js": ["markdown.js", "text/javascript"],
         "/marked.js": [
           fileURLToPath(import.meta.resolve("marked")),
@@ -492,6 +518,7 @@ export function createAppServer(app: Runtime, options: ServerOptions) {
         error:
           error instanceof HttpError ||
           error instanceof SettingsError ||
+          error instanceof CommandError ||
           error instanceof TaskError ||
           error instanceof PolicyError ||
           error instanceof McpError

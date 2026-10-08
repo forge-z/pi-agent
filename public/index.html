@@ -456,6 +456,13 @@
                 maxlength="32000"
                 aria-describedby="composer-hint composer-shortcuts"
               ></textarea>
+              <div
+                id="command-suggestions"
+                class="command-suggestions"
+                role="listbox"
+                aria-label="Comandos do Pi"
+                hidden
+              ></div>
               <div class="composer-toolbar">
                 <span class="composer-identity"
                   ><img
@@ -899,6 +906,57 @@
           </div>
         </form>
       </section>
+    </dialog>
+    <dialog
+      id="command-results-dialog"
+      class="command-results-dialog"
+      aria-labelledby="command-results-title"
+    >
+      <form method="dialog">
+        <button class="dialog-close icon-button" aria-label="Fechar">
+          <svg class="icon" aria-hidden="true"><use href="/icons.svg#x" /></svg>
+        </button>
+      </form>
+      <span class="dialog-icon" id="command-results-icon"
+        ><svg class="icon" aria-hidden="true">
+          <use href="/icons.svg#asterisk" /></svg
+      ></span>
+      <p class="eyebrow" id="command-results-eyebrow"></p>
+      <h2 id="command-results-title"></h2>
+      <p id="command-results-intro" class="command-results-intro"></p>
+      <div id="command-results-body" class="command-results-body"></div>
+    </dialog>
+    <dialog
+      id="command-tasks-dialog"
+      class="command-tasks-dialog"
+      aria-labelledby="command-tasks-title"
+    >
+      <form method="dialog">
+        <button class="dialog-close icon-button" aria-label="Fechar tarefas">
+          <svg class="icon" aria-hidden="true"><use href="/icons.svg#x" /></svg>
+        </button>
+      </form>
+      <span class="dialog-icon"
+        ><svg class="icon" aria-hidden="true">
+          <use href="/icons.svg#list" /></svg
+      ></span>
+      <p class="eyebrow">ATIVIDADE ATUAL</p>
+      <h2 id="command-tasks-title">Tarefas em andamento.</h2>
+      <p class="command-results-intro">
+        Acompanhe as execuções ativas nas suas conversas.
+      </p>
+      <div class="command-tasks-toolbar">
+        <span id="command-tasks-updated" class="fine"></span>
+        <button id="command-tasks-refresh" type="button" class="subtle">
+          Atualizar
+        </button>
+      </div>
+      <p id="command-tasks-error" class="error" role="alert"></p>
+      <div
+        id="command-tasks-list"
+        class="command-tasks-list"
+        aria-live="polite"
+      ></div>
     </dialog>
     <dialog id="link-dialog" aria-labelledby="link-title">
       <form method="dialog">

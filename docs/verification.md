@@ -100,3 +100,22 @@ Verificação local em 8 de outubro de 2026, na branch `fix/chat-tasks-markdown`
 ![Markdown no celular](evidence/chat-fixes/markdown-mobile.jpg)
 
 ![Tarefa criada pelo chat no painel](evidence/chat-fixes/task-from-chat.jpg)
+
+## Comandos web e Telegram
+
+Estado final verificado em 8 de outubro de 2026, na branch local `feat/web-telegram-slash`, partindo de `74f1d1e`.
+
+- **84 testes passaram**, zero falhas e zero testes ignorados, em 32,80 segundos, depois da correção final de `outcome.result.entryId`. `npm run check`, `npm run lint`, `npm run build` e `git diff --check` também passaram. A execução local usou Node 26; o container Node 24 não foi reconstruído neste lote.
+- Os testes de comandos verificam despacho antes do modelo, catálogo e esforços suportados pelo Pi, escape de barra literal, comandos inválidos, colisão entre mensagem e comando, concorrência, recibos após reinício e repetição de alterações antigas. Uma compactação vazia retorna `noop` sem invocar o provider e sem afirmar que criou um resumo.
+- HTTP exige sessão e protege mutações por origem. Telegram preserva as allowlists e o vínculo de uso único, acrescenta grants por usuário/chat/conversa e verifica fingerprints dos updates. Os testes mostram que `/agents` e `/crons` respeitam o conjunto autorizado; agendas não vinculadas não aparecem. `/tasks` aplica o mesmo conjunto às execuções do Harness. Respostas e erros de comandos usam entregas persistentes e são deduplicados, incluindo envios incertos.
+- O SIGKILL ocorre depois da admissão de uma compactação real no Durable e antes do recibo: a tarefa permanece na base e repetir o comando não admite outra. `/stop` interrompe execução e fila, preserva a agenda futura e não reaplica um comando antigo contra trabalho novo. Uma chamada ao SDK MCP mock interrompida fica incerta, com efeito contado uma vez mesmo após reinício. As regressões de aprovações duplicadas e recuperação anterior continuam passando.
+- Na interface final em modo demo: sugestões por `/`, seleção por teclado sem envio, toque no celular, seletor de modelo e acompanhamento da compactação até **Sem alterações**. Desktop 1280×720 e celular 390×844 foram conferidos; o menu respeita o espaço acima do compositor, sem sobrepor o cabeçalho nem causar overflow horizontal. Temas claro e escuro usam as paletas existentes. Console sem erros na conferência final. Os testes automatizados também cobrem Ctrl+Enter, Shift/Alt+Enter, Shift+Tab, IME, Escape, tecla repetida e respostas atrasadas.
+- A validação usou contas e transportes mock/demonstração, sem conectar ChatGPT real ou enviar Telegram real. A aba e o processo da prévia na porta 3144 foram encerrados e o viewport foi restaurado. Não houve push, merge, execução de crons reais ou deploy. A compactação tem o limite de admissão incerta documentado em [comandos](slash-commands.md); esse estado não dispara replay cego.
+
+![Autocomplete escuro no desktop](evidence/slash-commands/autocomplete-dark.jpg)
+
+![Autocomplete claro no celular](evidence/slash-commands/autocomplete-mobile.jpg)
+
+![Resultado real de compactação sem contexto](evidence/slash-commands/compact-noop.jpg)
+
+![Ajuda no celular](evidence/slash-commands/help-mobile.jpg)

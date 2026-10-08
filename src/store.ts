@@ -44,6 +44,11 @@ export class Store {
       CREATE TABLE IF NOT EXISTS reads(conversationId TEXT PRIMARY KEY, result TEXT);
       CREATE TABLE IF NOT EXISTS links(code TEXT PRIMARY KEY, conversationId TEXT, expires INTEGER);
       CREATE TABLE IF NOT EXISTS telegram(chat TEXT PRIMARY KEY, conversationId TEXT, user TEXT);
+      CREATE TABLE IF NOT EXISTS telegram_grants(chat TEXT, user TEXT, conversationId TEXT, PRIMARY KEY(chat,user,conversationId));
+      CREATE TABLE IF NOT EXISTS telegram_updates(id INTEGER PRIMARY KEY, fingerprint TEXT NOT NULL);
+      INSERT OR IGNORE INTO telegram_grants SELECT chat,user,conversationId FROM telegram;
+      CREATE TABLE IF NOT EXISTS command_receipts(key TEXT PRIMARY KEY, conversationId TEXT NOT NULL, requestId TEXT NOT NULL, text TEXT NOT NULL, state TEXT NOT NULL, result TEXT);
+      CREATE UNIQUE INDEX IF NOT EXISTS command_request ON command_receipts(conversationId,requestId);
       CREATE TABLE IF NOT EXISTS deliveries(id TEXT PRIMARY KEY, chat TEXT, text TEXT, state TEXT DEFAULT 'pending', result TEXT);
       CREATE TABLE IF NOT EXISTS credentials(provider TEXT PRIMARY KEY, value TEXT);
       CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
@@ -55,7 +60,7 @@ export class Store {
     )
       this.db.exec("ALTER TABLE actions ADD COLUMN evidence TEXT DEFAULT '{}'");
     this.db.exec(
-      "UPDATE actions SET state='uncertain' WHERE state='running'; UPDATE deliveries SET state='uncertain' WHERE state='sending';",
+      "UPDATE actions SET state='uncertain' WHERE state='running'; UPDATE deliveries SET state='uncertain' WHERE state='sending'; UPDATE command_receipts SET state='uncertain' WHERE state='pending';",
     );
   }
   all<T>(sql: string, ...args: (string | number | null)[]): T[] {
@@ -99,6 +104,12 @@ export class Store {
         user,
       );
       this.run("DELETE FROM links WHERE code=?", hash(code));
+      this.run(
+        "INSERT OR IGNORE INTO telegram_grants VALUES (?,?,?)",
+        chat,
+        user,
+        link.conversationId,
+      );
       if (updateKey)
         this.run(
           "INSERT OR IGNORE INTO meta VALUES (?,?)",

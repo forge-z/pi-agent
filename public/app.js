@@ -1,5 +1,10 @@
 import { configureUI } from "/settings.js";
 import { renderMarkdown } from "/markdown.js";
+import {
+  canDispatchCommandResult,
+  createSlashAutocomplete,
+  refreshConversationSnapshot,
+} from "/commands.js";
 
 const $ = (id) => document.getElementById(id);
 let conversationId = null;
@@ -98,6 +103,8 @@ async function api(path, method = "GET", data) {
 }
 function showLogin() {
   events?.close();
+  slashAutocomplete.close();
+  clearCommandPolls();
   sidebar(false, false);
   document.querySelectorAll("dialog[open]").forEach((dialog) => dialog.close());
   $("login").hidden = false;
@@ -121,6 +128,446 @@ function node(tag, value, cls) {
   if (value !== undefined) element.textContent = value;
   if (cls) element.className = cls;
   return element;
+}
+const slashAutocomplete = createSlashAutocomplete({
+  api,
+  document,
+  input: $("message"),
+  list: $("command-suggestions"),
+});
+$("message").addEventListener("input", () => slashAutocomplete.update());
+function refreshCurrentConversation(id) {
+  return refreshConversationSnapshot(id, {
+    getConversationId: () => conversationId,
+    loadConversations,
+    api,
+    render,
+  });
+}
+let compactCommandPoll = null;
+let commandTasksPoll = null;
+let activeCompactRequest = null;
+function clearCommandPolls() {
+  clearInterval(compactCommandPoll);
+  clearInterval(commandTasksPoll);
+  compactCommandPoll = null;
+  commandTasksPoll = null;
+  activeCompactRequest = null;
+}
+const commandStatusLabels = {
+  accepted: "Aceito",
+  pending: "Pendente",
+  running: "Em execução",
+  waiting: "Aguardando",
+  completing: "Finalizando",
+  completed: "Concluído",
+  aborted: "Interrompido",
+  faulted: "Com falha",
+  orphaned: "Sem processo",
+  uncertain: "Incerto",
+  noop: "Sem alterações",
+};
+function commandStatusRaw(status) {
+  if (status === undefined || status === null || status === "") return "";
+  if (typeof status === "string" || typeof status === "number")
+    return String(status);
+  return status.state || status.status || JSON.stringify(status);
+}
+function commandStatusText(status) {
+  const value = commandStatusRaw(status);
+  if (!value) return "Status não informado";
+  return commandStatusLabels[value.toLocaleLowerCase()] || value;
+}
+function localizeCommandText(text, status) {
+  if (typeof text !== "string" || !text) return "";
+  const raw = commandStatusRaw(status);
+  const label = raw && commandStatusLabels[raw.toLocaleLowerCase()];
+  if (!label) return text;
+  return text.replace(new RegExp(`\\b${raw}\\b`, "gi"), label);
+}
+function isUncertainCommandResult(result) {
+  return commandStatusRaw(result.status).toLocaleLowerCase() === "uncertain";
+}
+function showUncertainCommandResult(result) {
+  const command = String(result.command || "comando").replace(/^\/+/, "");
+  const content = [];
+  if (result.taskId) content.push(commandResultCard("Tarefa", result.taskId));
+  if (result.data !== undefined)
+    content.push(commandResultCard("Detalhes", result.data));
+  showCommandResults({
+    iconName: "warning-circle",
+    eyebrow: "RESULTADO INCERTO",
+    title: "Não foi possível confirmar o resultado.",
+    intro:
+      localizeCommandText(result.text, result.status) ||
+      `O comando /${command} não será repetido automaticamente.`,
+    content: [
+      commandResultCard("Status", commandStatusText(result.status)),
+      ...content,
+    ],
+  });
+}
+function prettyCommandData(data) {
+  if (typeof data === "string") return data;
+  try {
+    return JSON.stringify(data, null, 2);
+  } catch {
+    return String(data);
+  }
+}
+function showCommandResults({
+  iconName,
+  eyebrow,
+  title,
+  intro,
+  content = [],
+  preserveCompactPoll = false,
+}) {
+  slashAutocomplete.close();
+  sidebar(false, false);
+  if (!preserveCompactPoll) {
+    clearInterval(compactCommandPoll);
+    compactCommandPoll = null;
+    activeCompactRequest = null;
+  }
+  $("command-results-icon").replaceChildren(icon(iconName || "asterisk"));
+  $("command-results-eyebrow").textContent = eyebrow || "COMANDO DO PI";
+  $("command-results-title").textContent = title || "Resultado";
+  $("command-results-intro").textContent = intro || "";
+  $("command-results-body").replaceChildren(...content);
+  if (!$("command-results-dialog").open)
+    $("command-results-dialog").showModal();
+}
+function commandResultCard(label, value) {
+  const card = node("section", undefined, "command-result-card");
+  card.append(node("strong", label));
+  if (typeof value === "string" || typeof value === "number")
+    card.append(node("p", String(value), "command-result-value"));
+  else card.append(node("pre", prettyCommandData(value)));
+  return card;
+}
+async function showHelpResult(result, sourceConversation) {
+  const commands = await slashAutocomplete.getCommands();
+  if (sourceConversation !== conversationId) return;
+  const body = commands.map((command) => {
+    const item = node("article", undefined, "command-help-item");
+    const heading = node("div", undefined, "command-help-heading");
+    heading.append(
+      node("strong", `/${String(command.name).replace(/^\/+/, "")}`),
+      node("code", command.usage || `/${command.name}`),
+    );
+    item.append(heading);
+    item.append(node("p", command.description || ""));
+    return item;
+  });
+  if (!body.length && result.data !== undefined)
+    body.push(commandResultCard("Ajuda", result.data));
+  showCommandResults({
+    iconName: "lightbulb",
+    eyebrow: "AJUDA RÁPIDA",
+    title: "Comandos do Pi.",
+    intro:
+      "Digite / no início da mensagem para encontrar e escolher um comando. //texto envia /texto literalmente. /agents lista conversas existentes e não cria agentes; /stop preserva as próximas rotinas agendadas.",
+    content: body,
+  });
+}
+async function openAgentConversation(agent) {
+  const sourceConversation = conversationId;
+  if (!sourceConversation) return;
+  const requestId = crypto.randomUUID();
+  const response = await api(
+    `/api/conversations/${encodeURIComponent(sourceConversation)}/messages`,
+    "POST",
+    {
+      text: `/agents ${agent.id}`,
+      requestId,
+      conversationId: sourceConversation,
+    },
+  );
+  if (response?.kind !== "command") return;
+  await loadConversations();
+  const sourceStillAvailable = conversationsCache.some(
+    (item) => item.id === sourceConversation,
+  );
+  if (
+    !canDispatchCommandResult(
+      "agents",
+      true,
+      sourceConversation,
+      conversationId,
+      sourceStillAvailable,
+    )
+  )
+    return;
+  if (isUncertainCommandResult(response)) {
+    showUncertainCommandResult(response);
+    return;
+  }
+  const targetId = response.conversationId;
+  const target = conversationsCache.find((item) => item.id === targetId);
+  if (target && targetId !== conversationId) {
+    await select(targetId, target.title || agent.title || "Agente");
+  } else if (response.text) {
+    showCommandResults({
+      iconName: "check-circle",
+      eyebrow: "CONVERSA",
+      title: agent.title || agent.id,
+      intro: response.text,
+    });
+  }
+}
+function showAgentPicker(result) {
+  const agents = Array.isArray(result.data)
+    ? result.data
+    : Array.isArray(result.agents)
+      ? result.agents
+      : [];
+  const body = agents.map((agent) => {
+    const button = node("button", undefined, "command-agent-choice");
+    button.type = "button";
+    const label = node("span");
+    label.append(
+      node("strong", agent.title || agent.id),
+      node("small", agent.id),
+    );
+    button.append(label, icon("arrow-right"));
+    button.onclick = guard(async () => {
+      button.disabled = true;
+      $("command-results-dialog").close();
+      await openAgentConversation(agent);
+    });
+    return button;
+  });
+  if (!body.length)
+    body.push(node("p", "Nenhum agente está disponível para esta conta."));
+  showCommandResults({
+    iconName: "asterisk",
+    eyebrow: "CONVERSAS DISPONÍVEIS",
+    title: "Escolha uma conversa.",
+    intro: "Abra uma conversa existente para continuar por aqui.",
+    content: body,
+  });
+}
+function compactStatusIsTerminal(status) {
+  const value =
+    typeof status === "string"
+      ? status.toLocaleLowerCase()
+      : String(status?.state || status?.status || "").toLocaleLowerCase();
+  return [
+    "completed",
+    "aborted",
+    "faulted",
+    "orphaned",
+    "noop",
+    "uncertain",
+  ].includes(value);
+}
+function renderCompactResult(result, preserveCompactPoll = false) {
+  const status = commandStatusText(result.status);
+  const content = [commandResultCard("Status recebido", status)];
+  if (result.taskId) content.push(commandResultCard("Tarefa", result.taskId));
+  if (result.data !== undefined)
+    content.push(commandResultCard("Resultado aceito", result.data));
+  showCommandResults({
+    iconName: "check-circle",
+    eyebrow: "COMPACTAÇÃO",
+    title: "Pedido de compactação.",
+    intro:
+      localizeCommandText(result.text, result.status) ||
+      "Status informado pelo servidor; esta tela atualiza pela consulta de status.",
+    content,
+    preserveCompactPoll,
+  });
+}
+function pollCompactStatus(conversation, requestId, initial) {
+  const dialog = $("command-results-dialog");
+  if (compactStatusIsTerminal(initial.status)) return;
+  activeCompactRequest = `${conversation}:${requestId}`;
+  const refresh = guard(async () => {
+    if (!dialog.open || activeCompactRequest !== `${conversation}:${requestId}`)
+      return;
+    const latest = await api(
+      `/api/conversations/${encodeURIComponent(conversation)}/commands/${encodeURIComponent(requestId)}`,
+    );
+    if (!dialog.open || activeCompactRequest !== `${conversation}:${requestId}`)
+      return;
+    const updated = { ...initial, ...latest };
+    renderCompactResult(updated, true);
+    if (compactStatusIsTerminal(updated.status)) {
+      clearInterval(compactCommandPoll);
+      compactCommandPoll = null;
+    }
+  });
+  compactCommandPoll = setInterval(refresh, 1800);
+}
+function renderCommandTasks(tasks) {
+  const list = $("command-tasks-list");
+  if (!tasks.length) {
+    list.replaceChildren(
+      node("p", "Nenhuma execução ativa no Pi.", "command-task-empty"),
+    );
+    return;
+  }
+  list.replaceChildren(
+    ...tasks.map((task) => {
+      const item = node("article", undefined, "command-task-item");
+      item.append(node("strong", task.title || task.kind || task.id));
+      const meta = node("div", undefined, "command-task-meta");
+      for (const value of [
+        task.status ? commandStatusText(task.status) : null,
+        task.phase ? commandStatusText(task.phase) : null,
+        task.conversationId ? `Conversa ${task.conversationId}` : null,
+        task.background ? "Em segundo plano" : "Em conversa",
+        task.abortRequested ? "Cancelamento solicitado" : null,
+      ])
+        if (value) meta.append(node("span", String(value)));
+      item.append(meta);
+      if (task.id) item.append(node("p", `ID ${task.id}`));
+      return item;
+    }),
+  );
+}
+async function refreshCommandTasks() {
+  const dialog = $("command-tasks-dialog");
+  if (!dialog.open) return;
+  $("command-tasks-error").textContent = "";
+  const response = await api("/api/commands/tasks");
+  if (!dialog.open) return;
+  const tasks = Array.isArray(response) ? response : response.tasks || [];
+  renderCommandTasks(tasks);
+  $("command-tasks-updated").textContent =
+    `Atualizado às ${new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}`;
+}
+async function openCommandTasks() {
+  clearInterval(commandTasksPoll);
+  commandTasksPoll = null;
+  sidebar(false, false);
+  const dialog = $("command-tasks-dialog");
+  dialog.showModal();
+  try {
+    await refreshCommandTasks();
+  } catch (error) {
+    $("command-tasks-error").textContent = error.message;
+  }
+  if (dialog.open)
+    commandTasksPoll = setInterval(() => {
+      void refreshCommandTasks().catch((error) => {
+        if (dialog.open) $("command-tasks-error").textContent = error.message;
+      });
+    }, 3500);
+}
+$("command-results-dialog").addEventListener("close", () => {
+  clearInterval(compactCommandPoll);
+  compactCommandPoll = null;
+  activeCompactRequest = null;
+});
+$("command-tasks-dialog").addEventListener("close", () => {
+  clearInterval(commandTasksPoll);
+  commandTasksPoll = null;
+});
+$("command-tasks-refresh").onclick = () => {
+  void refreshCommandTasks().catch((error) => {
+    $("command-tasks-error").textContent = error.message;
+  });
+};
+async function handleCommandResult(
+  result,
+  requestId,
+  sourceConversation,
+  submittedText,
+) {
+  const command = String(result.command || "").replace(/^\/+/, "");
+  const args = String(submittedText || "")
+    .trim()
+    .split(/\s+/)
+    .slice(1);
+  const hasArgs = args.some(Boolean);
+  if (command === "agents" && hasArgs) {
+    await loadConversations();
+    const sourceStillAvailable = conversationsCache.some(
+      (item) => item.id === sourceConversation,
+    );
+    if (
+      !canDispatchCommandResult(
+        command,
+        hasArgs,
+        sourceConversation,
+        conversationId,
+        sourceStillAvailable,
+      )
+    )
+      return;
+    if (isUncertainCommandResult(result)) {
+      showUncertainCommandResult(result);
+      return;
+    }
+    const targetId = result.conversationId;
+    const target = conversationsCache.find((item) => item.id === targetId);
+    if (target && targetId !== conversationId)
+      await select(targetId, target.title || "Agente");
+    return;
+  }
+  if (
+    !canDispatchCommandResult(
+      command,
+      hasArgs,
+      sourceConversation,
+      conversationId,
+    )
+  )
+    return;
+  if (isUncertainCommandResult(result)) {
+    showUncertainCommandResult(result);
+    return;
+  }
+  if (command === "agents" && !hasArgs) {
+    showAgentPicker(result);
+    return;
+  }
+  if ((command === "model" || command === "thinking") && !hasArgs) {
+    $("model-label").click();
+    return;
+  }
+  if (command === "model" || command === "thinking") {
+    await refreshCurrentConversation(
+      result.conversationId || sourceConversation,
+    );
+    return;
+  }
+  if (command === "crons") {
+    $("tasks-button").click();
+    return;
+  }
+  if (command === "tasks") {
+    await openCommandTasks();
+    return;
+  }
+  if (command === "help") {
+    await showHelpResult(result, sourceConversation);
+    return;
+  }
+  if (command === "compact") {
+    renderCompactResult(result);
+    pollCompactStatus(sourceConversation, requestId, result);
+    return;
+  }
+  const commandStatus = result.status;
+  showCommandResults({
+    iconName: command === "stop" ? "check-circle" : "asterisk",
+    eyebrow: `/${command || "comando"}`,
+    title: command === "stop" ? "Solicitação recebida." : "Comando concluído.",
+    intro:
+      localizeCommandText(result.text, commandStatus) ||
+      (commandStatus === undefined
+        ? ""
+        : `Status: ${commandStatusText(commandStatus)}`),
+    content: [
+      ...(result.taskId ? [commandResultCard("Tarefa", result.taskId)] : []),
+      ...(result.data === undefined
+        ? []
+        : [commandResultCard("Resultado", result.data)]),
+    ],
+  });
 }
 function renderConversations() {
   const query = $("search-conversations").value.toLocaleLowerCase("pt-BR");
@@ -730,14 +1177,31 @@ $("message-form").onsubmit = guard(async (event) => {
     `pending:${conversationId}`,
     JSON.stringify(pendingMessage),
   );
+  const outgoingMessage = { ...pendingMessage };
   $("send").disabled = true;
   $("error").textContent = "";
   try {
-    await api(
+    const result = await api(
       `/api/conversations/${sentConversation}/messages`,
       "POST",
-      pendingMessage,
+      outgoingMessage,
     );
+    if (result?.kind === "command") {
+      sessionStorage.removeItem(`pending:${sentConversation}`);
+      await handleCommandResult(
+        result,
+        outgoingMessage.requestId,
+        sentConversation,
+        content,
+      );
+      if (sentConversation === conversationId) {
+        if ($("message").value === content) $("message").value = "";
+        if (pendingMessage?.requestId === outgoingMessage.requestId)
+          pendingMessage = null;
+      }
+      await loadConversations();
+      return;
+    }
     sessionStorage.removeItem(`pending:${sentConversation}`);
     if (sentConversation === conversationId) {
       if ($("message").value === content) $("message").value = "";
@@ -840,6 +1304,7 @@ $("message").addEventListener("compositionend", () => {
   messageComposing = false;
 });
 $("message").addEventListener("keydown", (event) => {
+  if (!messageComposing && slashAutocomplete.handleKeydown(event)) return;
   if (
     event.key !== "Enter" ||
     messageComposing ||
@@ -880,11 +1345,6 @@ const settingsUI = configureUI(api, {
   loadConversations,
   refreshStatus,
   selectConversation: select,
-  refreshConversation: async (id) => {
-    await loadConversations();
-    if (id !== conversationId) return;
-    const snapshot = await api(`/api/conversations/${encodeURIComponent(id)}`);
-    if (id === conversationId) render(snapshot);
-  },
+  refreshConversation: refreshCurrentConversation,
 });
 api("/api/status").then(workspace).catch(showLogin);

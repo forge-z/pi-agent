@@ -1,5 +1,7 @@
 # Configurações e tarefas
 
+Os atalhos web/Telegram e suas referências no Pi estão em [Comandos na web e no Telegram](slash-commands.md).
+
 Abra **Configurações** no menu lateral. O seletor próximo ao compositor altera o modelo e o esforço da conversa atual; o painel define o padrão de novas conversas. As escolhas são persistidas pelo Pi Durable e sobrevivem a reinícios. Conversas existentes continuam com suas próprias escolhas. Aguarde uma conversa terminar antes de trocar seu modelo.
 
 O catálogo vem do provider registrado no Pi AI e os esforços são obtidos por `getSupportedThinkingLevels`. Um ID no catálogo não garante acesso por sua conta ChatGPT. Em modo demo, aparece somente o modelo local; `APP_MODE=live` habilita o catálogo OpenAI. A conexão ChatGPT continua independente da senha web.

@@ -36,6 +36,12 @@ import {
 import { McpCalls, type McpCall } from "./mcp-calls.js";
 import { Settings, SettingsError } from "./settings.js";
 import { Tasks, TaskError } from "./tasks.js";
+import {
+  Commands,
+  CommandError,
+  parseCommand,
+  type CommandAccess,
+} from "./commands.js";
 
 export interface RuntimeOptions {
   dir: string;
@@ -51,12 +57,21 @@ export class Runtime {
   readonly models: MutableModels;
   readonly settings: Settings;
   readonly tasks: Tasks;
+  readonly commands: Commands;
   harness!: Harness;
   mcpCalls!: McpCalls;
   mcpStatus: McpCatalog[] = [];
   private registry!: Registry;
   private release!: () => Promise<void>;
   private monitors = new Map<string, Promise<void>>();
+  private admissions = new Map<
+    string,
+    {
+      text: string;
+      actor: string;
+      work: Promise<Awaited<ReturnType<Runtime["admitOnce"]>>>;
+    }
+  >();
   private closing = false;
   private constructor(readonly options: RuntimeOptions) {
     this.store = new Store(options.dir);
@@ -92,6 +107,7 @@ export class Runtime {
     }
     this.settings = new Settings(this);
     this.tasks = new Tasks(this);
+    this.commands = new Commands(this);
     if (options.gateway instanceof McpGateway)
       this.mcpCalls = new McpCalls(this.store, options.gateway);
   }
@@ -401,6 +417,65 @@ export class Runtime {
     if (!conversation) throw new Error("Conversa não encontrada");
     return conversation;
   }
+  async admit(
+    conversationId: string,
+    requestId: string,
+    text: string,
+    access: CommandAccess,
+  ) {
+    if (this.closing) throw new CommandError("Serviço encerrando");
+    if (
+      !/^[\w:.-]{1,160}$/.test(requestId) ||
+      !text.trim() ||
+      text.length > 32000
+    )
+      throw new CommandError("Mensagem ou requestId inválido");
+    this.commands.authorize(conversationId, access);
+    const key = `${conversationId}:${requestId}`;
+    const actor = this.commands.key(conversationId, requestId, access);
+    const pending = this.admissions.get(key);
+    if (pending) {
+      if (pending.text !== text || pending.actor !== actor)
+        throw new CommandError("requestId já utilizado com conteúdo diferente");
+      return pending.work;
+    }
+    const work = Promise.resolve().then(() =>
+      this.admitOnce(conversationId, requestId, text, access),
+    );
+    this.admissions.set(key, { text, actor, work });
+    void work.finally(() => this.admissions.delete(key)).catch(() => {});
+    return work;
+  }
+  private async admitOnce(
+    conversationId: string,
+    requestId: string,
+    text: string,
+    access: CommandAccess,
+  ) {
+    if (parseCommand(text))
+      return this.commands.execute(conversationId, requestId, text, access);
+    if (
+      this.store.get(
+        "SELECT 1 FROM command_receipts WHERE conversationId=? AND requestId=?",
+        conversationId,
+        requestId,
+      )
+    )
+      throw new CommandError("requestId já utilizado por um comando");
+    const escaped = text.trimStart().startsWith("//")
+      ? text.replace("/", "")
+      : text;
+    return {
+      kind: "message" as const,
+      ...(await this.submit(
+        conversationId,
+        requestId,
+        escaped,
+        access.source,
+        access.source === "telegram" ? access.chat : null,
+      )),
+    };
+  }
   async submit(
     conversationId: string,
     requestId: string,
@@ -623,6 +698,7 @@ export class Runtime {
     this.closing = true;
     await this.tasks.close();
     await this.mcpCalls?.close();
+    await this.commands.close();
     await this.harness.close(context);
     await Promise.allSettled(this.monitors.values());
     this.store.close();

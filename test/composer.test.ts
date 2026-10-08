@@ -58,7 +58,7 @@ function composer() {
   );
   // Load the real application handlers, substituting only the browser environment.
   runInNewContext(
-    source.replace(/^import[^\n]+\n/gm, "") + '\nconversationId = "2";',
+    source.replace(/^import[\s\S]*?;\s*/gm, "") + '\nconversationId = "2";',
     {
       document: {
         getElementById: element,
@@ -68,6 +68,14 @@ function composer() {
       window: { matchMedia: () => ({ matches: false, addEventListener() {} }) },
       navigator: {},
       configureUI: () => ({ reset() {} }),
+      canDispatchCommandResult: () => true,
+      createSlashAutocomplete: () => ({
+        close() {},
+        handleKeydown: () => false,
+        update() {},
+        getCommands: async () => [],
+      }),
+      refreshConversationSnapshot: async () => true,
       crypto: { randomUUID },
       Event,
       sessionStorage: {

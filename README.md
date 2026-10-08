@@ -19,6 +19,8 @@ Para produção com Docker Compose ou Coolify, use [docs/deployment.md](docs/dep
 
 O painel **Configurações** permite gerenciar servidores MCP e os padrões de modelo/esforço. O seletor na conversa aplica a escolha somente à conversa atual. **Tarefas** permite criar execuções únicas ou cron, pausar, executar agora e acompanhar o histórico. Veja [configurações e tarefas](docs/settings-and-tasks.md) para uso, persistência e referências no código do Pi.
 
+Digite `/` no compositor para encontrar `/agents`, `/model`, `/thinking`, `/compact`, `/tasks`, `/crons`, `/stop` e `/help`. Eles também funcionam no Telegram, com acesso limitado às conversas vinculadas. Consulte [comandos e referências do Pi](docs/slash-commands.md).
+
 | Variável                                                            | Uso                                                                                                                                 |
 | ------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
 | `WEB_PASSWORD` / `WEB_PASSWORD_FILE`                                | Senha da interface, com no mínimo 12 caracteres. O arquivo tem precedência quando definido. Separe essa senha do login do provider. |
