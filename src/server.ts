@@ -435,6 +435,7 @@ export function createAppServer(app: Runtime, options: ServerOptions) {
             let dirty = true;
             let sending = false;
             let closed = false;
+            let lastSnapshotHash: string | undefined;
             const detach = await app.watch(id, () => {
               dirty = true;
             });
@@ -443,6 +444,7 @@ export function createAppServer(app: Runtime, options: ServerOptions) {
                 !dirty ||
                 sending ||
                 closed ||
+                response.writableNeedDrain ||
                 response.writableLength > 262144
               )
                 return;
@@ -460,24 +462,31 @@ export function createAppServer(app: Runtime, options: ServerOptions) {
                   return;
                 }
                 const snapshot = await app.snapshot(id);
-                if (!closed)
-                  response.write(
-                    `event: snapshot\ndata: ${JSON.stringify(snapshot)}\n\n`,
-                  );
+                const encoded = JSON.stringify(snapshot);
+                const snapshotHash = hash(encoded);
+                // Keep polling for SQLite-only transitions (approvals, MCP,
+                // deliveries). Deduplicate before the browser parses SSE/JSON,
+                // and keep only a digest rather than another history in memory.
+                if (!closed && snapshotHash !== lastSnapshotHash) {
+                  response.write(`event: snapshot\ndata: ${encoded}\n\n`);
+                  // A false write result is already queued by Node. Do not
+                  // retransmit it; resume with the latest state after drain.
+                  lastSnapshotHash = snapshotHash;
+                }
               } catch {
                 response.end();
               } finally {
                 sending = false;
               }
             };
-            await send();
             const poll = setInterval(() => {
               dirty = true;
               void send();
             }, 500);
             const ping = setInterval(() => {
               if (response.writableLength > 1048576) response.end();
-              else response.write(": ping\n\n");
+              else if (!response.writableNeedDrain)
+                response.write(": ping\n\n");
             }, 15000);
             response.on("close", () => {
               closed = true;
@@ -486,6 +495,9 @@ export function createAppServer(app: Runtime, options: ServerOptions) {
               detach();
               streams.delete(response);
             });
+            // Install cleanup before awaiting the initial snapshot, including
+            // when a client disconnects during that read.
+            await send();
             return;
           }
         }
