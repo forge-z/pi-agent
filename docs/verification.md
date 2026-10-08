@@ -65,3 +65,20 @@ Capturas da interface atual:
 ![Tela de entrada](evidence/redesign/login-blue.jpg)
 
 A prévia usa dados descartáveis em `/tmp/pi-agent-redesign-demo`, com respostas locais de demonstração. Contas e serviços reais continuam desconectados.
+
+## Tema Pi e atalhos do compositor
+
+Verificação em 8 de outubro de 2026, Node.js 26.0.0 no macOS; o container continua usando Node.js 24.
+
+- `npm run check`, `npm run lint`, `npm run build` e `git diff --check`: passaram.
+- **54 testes passaram**, nenhum skip/fail. A suíte inclui Enter para enviar, Ctrl+Enter para inserir nova linha no cursor, proteção contra composição IME, envios repetidos e requisições simultâneas. O teste adicional de aparência verifica Pi após reload, Claro/Escuro/Automático, mudança do sistema, sincronização entre abas e armazenamento indisponível; Azul/Cinza continuam cobertos.
+- No navegador local: entrada, conversa e configurações, Pi claro/escuro/automático, persistência após reload e logout, alternância para Azul/Cinza e retorno ao Pi. O modo automático resolveu a aparência clara do sistema; mudanças para sistema escuro e escolhas manuais foram exercitadas no teste automatizado.
+- Desktop 1280×720, celular 375×812 e entrada em 812×375: sem overflow horizontal. Os seletores quebram linhas quando necessário e o menu permite rolagem. Console sem erros durante a conferência.
+- Dez pares de texto/superfície medidos em cada modo Pi: contraste mínimo **5,37:1 no claro** e **5,33:1 no escuro**. Campos de configurações e seletores de aparência usam bordas fortes. A grade usa CSS estático e os efeitos continuam respeitando movimento reduzido.
+- A prévia utilizou apenas demonstração em loopback e dados descartáveis, sem conectar contas ou enviar mensagens a serviços externos.
+
+![Tema Pi claro no desktop](evidence/pi-theme/desktop-light.jpg)
+
+![Tema Pi escuro no desktop](evidence/pi-theme/desktop-dark.jpg)
+
+![Tema Pi escuro no celular](evidence/pi-theme/mobile-dark.jpg)

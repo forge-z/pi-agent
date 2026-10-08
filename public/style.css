@@ -1942,6 +1942,8 @@ dialog .fine {
   display: flex;
   gap: 10px;
   align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 .palette-switch {
   display: flex;
@@ -1978,6 +1980,9 @@ dialog .fine {
 [data-palette-choice="gray"] .palette-swatch {
   background: #929292;
 }
+[data-palette-choice="pi"] .palette-swatch {
+  background: linear-gradient(135deg, #ebe7e4 50%, #4b607c 50%);
+}
 .palette-row {
   display: flex;
   align-items: center;
@@ -1987,6 +1992,7 @@ dialog .fine {
   padding: 0 3px;
   color: var(--muted);
   font-size: 0.69rem;
+  flex-wrap: wrap;
 }
 .palette-row .palette-switch {
   background: transparent;
@@ -2025,6 +2031,9 @@ dialog .fine {
 }
 @media (max-width: 760px) {
   .login-top {
+    justify-content: center;
+  }
+  .login-preferences {
     justify-content: center;
   }
   .palette-switch button {
@@ -2477,4 +2486,153 @@ dialog .fine {
   .space-navigation {
     margin-bottom: 14px;
   }
+}
+
+/* Pi's website palette (pi.dev/style.css), adapted to the existing workspace.
+   System serif/monospace fonts avoid bundling the site's commercial Plantin. */
+:root[data-palette="pi"] {
+  --bg: #ebe7e4;
+  --sidebar: #e4e0dc;
+  --card: #f3f2f0;
+  --ink: #252f3d;
+  --muted: #5c5752;
+  --line: #b9b4ae;
+  --line-strong: #817a74;
+  --hover: #dedad5;
+  --soft: #e2e5e8;
+  --accent: #4b607c;
+  --accent-soft: #dbe1e8;
+  --primary: #4b607c;
+  --on-primary: #ffffff;
+  --danger: #844f3b;
+  --success: #45604b;
+  --success-soft: #dce5da;
+  --warning: #73532d;
+  --warning-soft: #ece2d3;
+  --shadow: 0 3px 10px #5c575210;
+  --serif: Georgia, "Times New Roman", serif;
+  --mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  --grid-line: #252f3d08;
+}
+:root[data-palette="pi"][data-theme="dark"] {
+  --bg: #161d27;
+  --sidebar: #0d1116;
+  --card: #212730;
+  --ink: #ebe7e4;
+  --muted: #b3b7bd;
+  --line: #495059;
+  --line-strong: #757d89;
+  --hover: #303b49;
+  --soft: #252f3d;
+  --accent: #6a9fcc;
+  --accent-soft: #263c50;
+  --primary: #6a9fcc;
+  --on-primary: #0d1116;
+  --danger: #e8a38d;
+  --success: #a3c7a7;
+  --success-soft: #293e33;
+  --warning: #e1b06e;
+  --warning-soft: #3c3225;
+  --shadow: 0 3px 12px #00000030;
+  --grid-line: #b8cce209;
+}
+:root[data-palette="pi"]
+  :is(.login, .login-story, .main-content, .composer-area) {
+  background-image:
+    linear-gradient(var(--grid-line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid-line) 1px, transparent 1px);
+  background-size: 20px 20px;
+}
+:root[data-palette="pi"]
+  :is(
+    button,
+    input,
+    textarea,
+    select,
+    dialog,
+    .theme-switch,
+    .palette-switch,
+    .login-story,
+    .password-field,
+    .search-field,
+    .provider-icon,
+    .message.user,
+    .message.toolResult,
+    .action,
+    .deliveries,
+    .dialog-icon,
+    .section-icon,
+    .permission-note,
+    .management-card,
+    .discovered-tool,
+    .art-note,
+    #message-form
+  ) {
+  border-radius: 3px;
+}
+:root[data-palette="pi"]
+  :is(
+    button,
+    label,
+    .eyebrow,
+    .story-foot,
+    .speaker,
+    .fine,
+    .appearance-row,
+    .palette-row,
+    .send-shortcut
+  ) {
+  font-family: var(--mono);
+}
+:root[data-palette="pi"] :is(.welcome h2, .login-card h2, .story-copy h1) {
+  font-style: italic;
+  letter-spacing: -0.04em;
+}
+:root[data-palette="pi"] .welcome h2 {
+  font-size: clamp(2.7rem, 4.2vw, 3.6rem);
+  line-height: 1.12;
+}
+:root[data-palette="pi"] .story-copy h1 {
+  font-size: clamp(3rem, 4.7vw, 4.8rem);
+  line-height: 1.08;
+}
+:root[data-palette="pi"] .login-story {
+  background-color: var(--bg);
+  color: var(--ink);
+  border: 1px solid var(--line);
+}
+:root[data-palette="pi"]
+  :is(.story-copy .eyebrow, .story-copy > p:last-child, .story-foot) {
+  color: var(--muted);
+}
+:root[data-palette="pi"] .story-copy em {
+  color: var(--accent);
+}
+:root[data-palette="pi"] :is(.orbit, .story-foot) {
+  border-color: var(--line);
+}
+:root[data-palette="pi"] .art-note {
+  color: var(--ink);
+  background: var(--card);
+  border-color: var(--line);
+  box-shadow: var(--shadow);
+}
+:root[data-palette="pi"] .note-two {
+  background: var(--accent-soft);
+}
+:root[data-palette="pi"] .art-mark img {
+  transform: none;
+}
+:root[data-palette="pi"] .suggestions button {
+  font-family: var(--sans);
+  background: var(--card);
+}
+:root[data-palette="pi"]
+  .form-field
+  :is(input, textarea, select):not(:focus-visible),
+:root[data-palette="pi"] :is(.palette-switch, .theme-switch),
+:root[data-palette="pi"]
+  :is(.palette-switch, .theme-switch)
+  button[aria-pressed="true"] {
+  border-color: var(--line-strong);
 }

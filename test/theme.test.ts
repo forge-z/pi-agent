@@ -24,7 +24,7 @@ function appearance(
       this.pressed = value;
     },
   }));
-  const paletteButtons = ["blue", "gray"].map((palette) => ({
+  const paletteButtons = ["blue", "gray", "pi"].map((palette) => ({
     dataset: { paletteChoice: palette },
     pressed: "",
     setAttribute(_key: string, value: string) {
@@ -74,6 +74,7 @@ function appearance(
     root,
     storage,
     buttons,
+    paletteButtons,
     get color() {
       return themeColor;
     },
@@ -153,4 +154,39 @@ test("blue and gray palettes persist independently from automatic, light and dar
   assert.equal(reload.root.dataset.theme, "light");
   reload.selectPalette("invalid");
   assert.equal(reload.root.dataset.palette, "blue");
+});
+
+test("Pi palette survives reload, follows automatic appearance and synchronizes between tabs", () => {
+  const ui = appearance("auto", false, false, "gray");
+  ui.selectPalette("pi");
+  assert.equal(ui.storage.get("pi:palette"), "pi");
+  assert.equal(ui.root.dataset.themePreference, "auto");
+  assert.equal(ui.color, "#ebe7e4");
+  assert.equal(
+    ui.paletteButtons.filter((button) => button.pressed === "true")[0].dataset
+      .paletteChoice,
+    "pi",
+  );
+  ui.changeSystem(true);
+  assert.equal(ui.color, "#161d27");
+  const reload = appearance("auto", true, false, ui.storage.get("pi:palette")!);
+  assert.equal(reload.root.dataset.palette, "pi");
+  assert.equal(reload.root.dataset.theme, "dark");
+  reload.select("light");
+  reload.changeSystem(true);
+  assert.equal(reload.color, "#ebe7e4");
+  reload.select("dark");
+  reload.changeSystem(false);
+  assert.equal(reload.color, "#161d27");
+  reload.sync("blue", "pi:palette");
+  assert.equal(reload.root.dataset.themePreference, "dark");
+  assert.equal(reload.color, "#141e30");
+  reload.sync("pi", "pi:palette");
+  assert.equal(reload.color, "#161d27");
+  reload.sync(null, "pi:palette");
+  assert.equal(reload.root.dataset.palette, "blue");
+  const blocked = appearance(null, false, true);
+  blocked.selectPalette("pi");
+  blocked.changeSystem(true);
+  assert.equal(blocked.color, "#161d27");
 });

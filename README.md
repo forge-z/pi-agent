@@ -58,6 +58,6 @@ Os testes usam provider faux, MCP HTTP em loopback e transporte Telegram mock. I
 
 ## Aparência
 
-A interface tem paletas **Azul** e **Cinza**, com modos **Claro**, **Escuro** e **Automático** independentes. Os seletores ficam na entrada e no rodapé da navegação; no celular, abra o menu. A preferência é salva no navegador. O modo automático acompanha o sistema.
+A interface tem temas **Azul**, **Cinza** e **Pi**, com modos **Claro**, **Escuro** e **Automático** independentes. Pi segue o visual do [site oficial](https://pi.dev): papel quente no claro, azul profundo no escuro, títulos serifados, bordas retas e grade discreta. Os seletores ficam na entrada e no rodapé da navegação; no celular, abra o menu. A preferência é salva no navegador. O modo automático acompanha o sistema.
 
 O logo é o oficial do Pi, os ícones são Phosphor e as fontes são servidas localmente. Veja [a direção visual](docs/design.md) e [as capturas e verificações](docs/verification.md#refinamento-visual-paletas-e-modos-de-aparência).

@@ -3,7 +3,7 @@
   const paletteKey = "pi:palette";
   const system = window.matchMedia("(prefers-color-scheme: dark)");
   const validAppearance = (value) => ["light", "dark", "auto"].includes(value);
-  const validPalette = (value) => ["blue", "gray"].includes(value);
+  const validPalette = (value) => ["blue", "gray", "pi"].includes(value);
   let choice = "auto";
   let palette = "blue";
   try {
@@ -36,6 +36,7 @@
     const colors = {
       blue: { light: "#f5f8fc", dark: "#141e30" },
       gray: { light: "#f7f7f7", dark: "#202020" },
+      pi: { light: "#ebe7e4", dark: "#161d27" },
     };
     document
       .querySelector('meta[name="theme-color"]')
