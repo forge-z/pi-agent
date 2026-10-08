@@ -18,6 +18,7 @@ import {
 import { hash, SqlCredentials } from "../src/store.js";
 import type { TelegramUpdate } from "../src/telegram.js";
 import type { ToolGateway } from "../src/mcp.js";
+import { telegramCommandCatalog } from "../src/telegram-commands.js";
 
 const token = "123456:fake_local_test_token";
 const dm = (
@@ -56,6 +57,12 @@ class FakeTelegram implements TelegramApi {
   pending: (() => void) | undefined;
   activePolls = 0;
   maxActivePolls = 0;
+  menus = new Map<string, unknown[]>([
+    ["default", [{ command: "outside", description: "Outro serviço" }]],
+  ]);
+  menuWriteUncertain = false;
+  menuWriteNotApplied = false;
+  menuReadError = false;
   push(...updates: TelegramUpdate[]) {
     this.updates.push(...updates);
     this.pending?.();
@@ -86,6 +93,21 @@ class FakeTelegram implements TelegramApi {
       this.sent.push({ chat: payload.chat_id, text: payload.text });
       if (this.sendUncertain) throw new Error(`response lost ${token}`);
       return { message_id: this.sent.length };
+    }
+    if (method === "getMyCommands" || method === "setMyCommands") {
+      const scope = payload.scope as { type: string; chat_id: number };
+      assert.equal(scope.type, "chat");
+      const key = `${scope.chat_id}:${payload.language_code ?? ""}`;
+      if (method === "getMyCommands") {
+        if (this.menuReadError)
+          throw new Error(`private menu failure ${token}`);
+        return structuredClone(this.menus.get(key) ?? []);
+      }
+      if (!this.menuWriteNotApplied)
+        this.menus.set(key, structuredClone(payload.commands as unknown[]));
+      if (this.menuWriteUncertain || this.menuWriteNotApplied)
+        throw new Error(`menu response lost ${token}`);
+      return true;
     }
     if (this.pollError) {
       const error = this.pollError;
@@ -849,5 +871,208 @@ test("main starts with incomplete old Telegram environment and an unreadable leg
     child.kill("SIGTERM");
     await exited;
     await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("native command menu uses only the confirmed private chat, preserves global commands and survives restart without writes", async () => {
+  const f = await fixture();
+  try {
+    const id = await f.app.create();
+    await f.connect(id);
+    assert.equal(f.manager.snapshot().commandMenu.state, "waiting");
+    f.fake.push(dm(1, "/help", 7), dm(2, "/help", 42, "group"));
+    await until(() => f.offset() === "3");
+    assert.equal(
+      f.fake.calls.filter((c) => /MyCommands/.test(c.method)).length,
+      0,
+    );
+    const incoming = dm(3, "/help");
+    incoming.message!.from!.language_code = "pt-br";
+    f.fake.push(incoming);
+    await until(() => f.manager.snapshot().commandMenu.state === "ready");
+    const writes = f.fake.calls.filter((c) => c.method === "setMyCommands");
+    assert.equal(writes.length, 2);
+    for (const call of writes) {
+      assert.deepEqual(call.payload.scope, { type: "chat", chat_id: 42 });
+      assert.deepEqual(call.payload.commands, telegramCommandCatalog);
+    }
+    assert.deepEqual(
+      writes.map((c) => c.payload.language_code),
+      ["", "pt"],
+    );
+    assert.deepEqual(
+      telegramCommandCatalog.map((c) => c.command),
+      [
+        "agents",
+        "model",
+        "thinking",
+        "compact",
+        "tasks",
+        "crons",
+        "stop",
+        "help",
+      ],
+    );
+    assert.deepEqual(f.fake.menus.get("default"), [
+      { command: "outside", description: "Outro serviço" },
+    ]);
+    await f.restart();
+    await until(() => f.manager.snapshot().commandMenu.state === "ready");
+    assert.equal(
+      f.fake.calls.filter((c) => c.method === "setMyCommands").length,
+      2,
+    );
+  } finally {
+    await f.close();
+  }
+});
+
+test("a foreign private-chat menu is preserved before any language is modified", async () => {
+  const f = await fixture();
+  try {
+    const id = await f.app.create();
+    const foreign = [{ command: "outside", description: "Outro serviço" }];
+    f.fake.menus.set("42:pt", foreign);
+    f.fake.push(dm(1, "/help"));
+    await f.connect(id);
+    await until(() => f.manager.snapshot().commandMenu.state === "conflict");
+    assert.equal(f.manager.snapshot().state, "connected");
+    assert.equal(
+      f.fake.calls.filter((c) => c.method === "setMyCommands").length,
+      0,
+    );
+    assert.deepEqual(f.fake.menus.get("42:pt"), foreign);
+    await f.restart();
+    await until(() => f.manager.snapshot().commandMenu.state === "conflict");
+    assert.equal(
+      f.fake.calls.filter((c) => c.method === "setMyCommands").length,
+      0,
+    );
+  } finally {
+    await f.close();
+  }
+});
+
+test("an unknown command-menu write is verified after restart and never blindly repeated", async () => {
+  const f = await fixture();
+  try {
+    const id = await f.app.create();
+    f.fake.menuWriteUncertain = true;
+    f.fake.push(dm(1, "/help"));
+    await f.connect(id);
+    await until(() => f.manager.snapshot().commandMenu.state === "uncertain");
+    assert.equal(
+      f.fake.calls.filter((c) => c.method === "setMyCommands").length,
+      1,
+    );
+    f.fake.menuWriteUncertain = false;
+    await f.restart();
+    await until(() => f.manager.snapshot().commandMenu.state === "ready");
+    const writes = f.fake.calls.filter((c) => c.method === "setMyCommands");
+    assert.equal(writes.length, 2);
+    assert.deepEqual(
+      writes.map((c) => c.payload.language_code),
+      ["", "pt"],
+    );
+    assert.doesNotMatch(
+      JSON.stringify(f.manager.snapshot()),
+      new RegExp(token),
+    );
+  } finally {
+    await f.close();
+  }
+});
+
+test("a menu write not applied remains uncertain across restart until a fresh explicit connection", async () => {
+  const f = await fixture();
+  try {
+    const id = await f.app.create();
+    f.fake.menuWriteNotApplied = true;
+    f.fake.push(dm(1, "/help"));
+    await f.connect(id);
+    await until(() => f.manager.snapshot().commandMenu.state === "uncertain");
+    await f.restart();
+    await until(() => f.manager.snapshot().commandMenu.state === "uncertain");
+    assert.equal(
+      f.fake.calls.filter((c) => c.method === "setMyCommands").length,
+      1,
+    );
+    f.fake.menuWriteNotApplied = false;
+    f.fake.push(dm(2, "/help"));
+    await f.connect(id);
+    await until(() => f.manager.snapshot().commandMenu.state === "ready");
+    assert.equal(
+      f.fake.calls.filter((c) => c.method === "setMyCommands").length,
+      3,
+    );
+  } finally {
+    await f.close();
+  }
+});
+
+test("menu lookup failure does not block message admission or expose upstream errors", async () => {
+  const f = await fixture();
+  try {
+    const id = await f.app.create();
+    f.fake.menuReadError = true;
+    f.fake.push(dm(1, "/help"));
+    await f.connect(id);
+    await until(() => f.manager.snapshot().commandMenu.state === "retrying");
+    assert.equal(f.manager.snapshot().state, "connected");
+    assert.equal(f.offset(), "2");
+    assert.equal(
+      f.fake.calls.filter((c) => c.method === "setMyCommands").length,
+      0,
+    );
+    assert.doesNotMatch(
+      JSON.stringify(f.manager.snapshot()),
+      /private menu failure|fake_local_test_token/,
+    );
+    f.fake.menuReadError = false;
+    await f.restart();
+    await until(() => f.manager.snapshot().commandMenu.state === "ready");
+  } finally {
+    await f.close();
+  }
+});
+
+test("polling sends new ledger chunks as HTML and leaves older plain payloads intact", async () => {
+  const f = await fixture();
+  try {
+    const id = await f.app.create();
+    f.fake.push(dm(1, "/help"));
+    await f.connect(id);
+    await until(() => f.manager.snapshot().commandMenu.state === "ready");
+    f.app.store.queueTelegram("html-test", "42", "**Olá** & `x < y`\n\n- item");
+    f.app.store.run(
+      "INSERT INTO deliveries(id,chat,text) VALUES ('plain-test','42','**old**')",
+    );
+    f.fake.push(dm(2, "/help"));
+    await until(() =>
+      f.fake.calls.some(
+        (c) => c.method === "sendMessage" && c.payload.text === "**old**",
+      ),
+    );
+    const formatted = f.fake.calls.find(
+      (c) =>
+        c.method === "sendMessage" &&
+        String(c.payload.text).includes("<b>Olá</b>"),
+    )!;
+    assert.equal(formatted.payload.parse_mode, "HTML");
+    assert.match(String(formatted.payload.text), /<code>x &lt; y<\/code>/);
+    assert.match(String(formatted.payload.text), /• item/);
+    const old = f.fake.calls.find(
+      (c) => c.method === "sendMessage" && c.payload.text === "**old**",
+    )!;
+    assert.equal(old.payload.parse_mode, undefined);
+    const count = f.fake.calls.filter((c) => c.method === "sendMessage").length;
+    await f.restart();
+    await until(() => f.manager.snapshot().commandMenu.state === "ready");
+    assert.equal(
+      f.fake.calls.filter((c) => c.method === "sendMessage").length,
+      count,
+    );
+  } finally {
+    await f.close();
   }
 });

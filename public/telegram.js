@@ -19,6 +19,14 @@ const stateMessages = {
   blocked: "A conexão precisa de atenção.",
   webhook_conflict: "O bot já recebe atualizações por um webhook.",
 };
+const commandMenuStates = new Set([
+  "waiting",
+  "syncing",
+  "ready",
+  "retrying",
+  "conflict",
+  "uncertain",
+]);
 
 const $ = (id) => document.getElementById(id);
 
@@ -144,6 +152,22 @@ export function attachTelegramUI(
     firstMessage.textContent = awaitingFirstMessage
       ? "Abra o bot e envie uma mensagem privada do ID autorizado para vincular esta conversa."
       : "";
+    const commandMenu = status.commandMenu;
+    const commandMenuStatus = $("telegram-command-menu-status");
+    const hasCommandMenuStatus = Boolean(
+      commandMenu &&
+      commandMenuStates.has(commandMenu.state) &&
+      typeof commandMenu.message === "string" &&
+      commandMenu.message.trim(),
+    );
+    commandMenuStatus.hidden = !hasCommandMenuStatus;
+    if (hasCommandMenuStatus) {
+      commandMenuStatus.dataset.state = commandMenu.state;
+      commandMenuStatus.textContent = commandMenu.message;
+    } else {
+      delete commandMenuStatus.dataset.state;
+      commandMenuStatus.textContent = "";
+    }
     setStatusMessage(
       pendingConnectRetry
         ? "A conexão pode ter sido iniciada. Tente novamente para consultar o mesmo pedido sem duplicar a conexão."

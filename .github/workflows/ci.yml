@@ -22,6 +22,13 @@ jobs:
         run: |
           unset WEB_PASSWORD WEB_PASSWORD_SECRET_FILE TELEGRAM_BOT_TOKEN TELEGRAM_WEBHOOK_SECRET
           APP_ORIGIN=https://pi.example.com docker compose config --quiet
+          APP_ORIGIN=https://pi.example.com docker compose config --variables > /tmp/pi-agent-compose-variables
+          if grep -q 'TELEGRAM_' /tmp/pi-agent-compose-variables; then
+            echo 'Default Compose must not declare legacy Telegram variables'
+            exit 1
+          fi
+          APP_ORIGIN=https://pi.example.com docker compose config --format json > /tmp/pi-agent-compose-config.json
+          node -e "const c=require('/tmp/pi-agent-compose-config.json'); if(Object.keys(c.services['pi-agent'].environment).some(k=>k.startsWith('TELEGRAM_')) || Object.keys(c.secrets || {}).some(k=>/telegram/i.test(k))) throw new Error('Default Compose must not inject Telegram credentials')"
       - name: Verify non-root, persistent data and health
         run: |
           export APP_ORIGIN=http://localhost:3000 COOKIE_SECURE=false WEB_PASSWORD=ci-test-password-only

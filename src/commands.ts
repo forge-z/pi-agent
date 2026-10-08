@@ -416,18 +416,7 @@ export class Commands {
     return work;
   }
   private deliver(requestId: string, chat: string, text: string) {
-    let part = 0;
-    while (text) {
-      let end = Math.min(4000, text.length);
-      if (end < text.length && /[\uD800-\uDBFF]/.test(text[end - 1])) end--;
-      this.app.store.run(
-        "INSERT OR IGNORE INTO deliveries(id,chat,text) VALUES (?,?,?)",
-        `command:${requestId}:${part++}`,
-        chat,
-        text.slice(0, end),
-      );
-      text = text.slice(end);
-    }
+    this.app.store.queueTelegram(`command:${requestId}`, chat, text, 4000);
   }
   async close() {
     await Promise.allSettled(this.work.values());

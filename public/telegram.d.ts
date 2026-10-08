@@ -17,6 +17,13 @@ export interface TelegramStatusSnapshot {
   webhookUrl: string | null;
   webhookVersion?: string | null;
   awaitingFirstMessage: boolean;
+  commandMenu?: TelegramCommandMenuSnapshot;
+}
+
+export interface TelegramCommandMenuSnapshot {
+  state:
+    "waiting" | "syncing" | "ready" | "retrying" | "conflict" | "uncertain";
+  message: string;
 }
 
 export interface TelegramApi {

@@ -569,23 +569,7 @@ export class Runtime {
                   .join("\n")
               : "";
           if (answer) {
-            let offset = 0,
-              part = 0;
-            while (offset < answer.length) {
-              let end = Math.min(offset + 3500, answer.length);
-              if (
-                end < answer.length &&
-                /[\uD800-\uDBFF]/.test(answer[end - 1])
-              )
-                end--;
-              this.store.run(
-                "INSERT OR IGNORE INTO deliveries(id,chat,text) VALUES (?,?,?)",
-                `${key}:${part++}`,
-                chat,
-                answer.slice(offset, end),
-              );
-              offset = end;
-            }
+            this.store.queueTelegram(key, chat, answer);
           }
         }
         this.store.run(
