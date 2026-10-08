@@ -21,6 +21,8 @@ O painel **Configurações** permite gerenciar servidores MCP e os padrões de m
 
 Digite `/` no compositor para encontrar `/agents`, `/model`, `/thinking`, `/compact`, `/tasks`, `/crons`, `/stop` e `/help`. Eles também funcionam no Telegram, com acesso limitado às conversas vinculadas. Consulte [comandos e referências do Pi](docs/slash-commands.md).
 
+O Telegram registra esse catálogo no menu nativo `/` do chat privado autorizado depois da primeira mensagem. O diálogo mostra o estado do registro; menus de outros chats e menus alheios existentes são preservados. Novas respostas usam HTML seguro para negrito, itálico, links e código, com divisão de mensagens longas antes de entrar na fila persistente.
+
 | Variável                             | Uso                                                                                                                                                                                                                                                                   |
 | ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `WEB_PASSWORD` / `WEB_PASSWORD_FILE` | Senha da interface, com no mínimo 12 caracteres. O arquivo tem precedência quando definido. Separe essa senha do login do provider.                                                                                                                                   |
@@ -32,7 +34,7 @@ Digite `/` no compositor para encontrar `/agents`, `/model`, `/thinking`, `/comp
 | `MCP_CONFIG_FILE`                    | Arquivo JSON opcional com servidores MCP HTTP(S). Veja [docs/mcp.example.json](docs/mcp.example.json).                                                                                                                                                                |
 | Telegram                             | Conecte pelo botão **Telegram** no cabeçalho da conversa com o token do bot, seu ID numérico de usuário e a conversa atual como destino. O fluxo usa polling privado; veja [implantação](docs/deployment.md#telegram) e [arquitetura](docs/architecture.md#telegram). |
 
-As antigas variáveis Telegram em `.env` são somente dicas de migração: não iniciam o bot nem concedem acesso. `TELEGRAM_ALLOWED_USERS`, `TELEGRAM_ALLOWED_CHATS` e `TELEGRAM_WEBHOOK_SECRET` não fazem parte da configuração da nova interface. Valores incompletos dessas variáveis não impedem a aplicação web de iniciar.
+Os arquivos Compose não declaram nem encaminham variáveis ou secrets Telegram. Token e ID de usuário são configurados pela interface e persistem no volume. No Coolify, recarregue a definição Compose do `main` antes de excluir as variáveis antigas; na primeira migração, informe o token do mesmo bot na UI. Uma conexão já salva continua usando o SQLite existente.
 
 Use `npm run build` para compilar; `npm start` inicia `dist/src/main.js`. O runtime usa Pi Durable 1.0.4, Pi AI 1.0.4, SQLite integrado do Node e o SDK MCP por HTTP.
 

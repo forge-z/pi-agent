@@ -7,23 +7,31 @@ export interface TelegramUpdate {
   message?: {
     message_id: number;
     text?: string;
-    from?: { id: number; is_bot?: boolean };
+    from?: { id: number; is_bot?: boolean; language_code?: string };
     chat: { id: number; type: string };
   };
 }
 export interface TelegramTransport {
-  send(chat: string, text: string): Promise<unknown>;
+  send(
+    chat: string,
+    text: string,
+    options?: { parseMode?: "HTML" },
+  ): Promise<unknown>;
 }
 export class TelegramInputError extends Error {}
 export class TelegramHttp implements TelegramTransport {
   constructor(private token: string) {}
-  async send(chat: string, text: string) {
+  async send(chat: string, text: string, options?: { parseMode?: "HTML" }) {
     const response = await fetch(
       `https://api.telegram.org/bot${this.token}/sendMessage`,
       {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ chat_id: chat, text }),
+        body: JSON.stringify({
+          chat_id: chat,
+          text,
+          ...(options?.parseMode ? { parse_mode: options.parseMode } : {}),
+        }),
         signal: AbortSignal.timeout(15000),
       },
     );
@@ -292,7 +300,11 @@ export class Telegram {
       ).changes;
       if (!changed) continue;
       try {
-        const result = await this.transport.send(delivery.chat, delivery.text);
+        const result = await this.transport.send(
+          delivery.chat,
+          delivery.text,
+          delivery.parseMode === "HTML" ? { parseMode: "HTML" } : undefined,
+        );
         this.app.store.run(
           "UPDATE deliveries SET state='sent',result=? WHERE id=?",
           JSON.stringify(result),

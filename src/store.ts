@@ -1,6 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { randomBytes, createHash } from "node:crypto";
 import { mkdirSync } from "node:fs";
+import { formatTelegramMessage } from "./telegram-format.js";
 import type {
   Credential,
   CredentialStore,
@@ -31,6 +32,7 @@ export interface Delivery {
   chat: string;
   text: string;
   state: string;
+  parseMode: "HTML" | null;
 }
 export class Store {
   readonly db: DatabaseSync;
@@ -49,7 +51,7 @@ export class Store {
       INSERT OR IGNORE INTO telegram_grants SELECT chat,user,conversationId FROM telegram;
       CREATE TABLE IF NOT EXISTS command_receipts(key TEXT PRIMARY KEY, conversationId TEXT NOT NULL, requestId TEXT NOT NULL, text TEXT NOT NULL, state TEXT NOT NULL, result TEXT);
       CREATE UNIQUE INDEX IF NOT EXISTS command_request ON command_receipts(conversationId,requestId);
-      CREATE TABLE IF NOT EXISTS deliveries(id TEXT PRIMARY KEY, chat TEXT, text TEXT, state TEXT DEFAULT 'pending', result TEXT);
+      CREATE TABLE IF NOT EXISTS deliveries(id TEXT PRIMARY KEY, chat TEXT, text TEXT, state TEXT DEFAULT 'pending', result TEXT, parseMode TEXT);
       CREATE TABLE IF NOT EXISTS credentials(provider TEXT PRIMARY KEY, value TEXT);
       CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
       CREATE TABLE IF NOT EXISTS sessions(token TEXT PRIMARY KEY, expires INTEGER);`);
@@ -59,6 +61,12 @@ export class Store {
       )
     )
       this.db.exec("ALTER TABLE actions ADD COLUMN evidence TEXT DEFAULT '{}'");
+    if (
+      !this.all<{ name: string }>("PRAGMA table_info(deliveries)").some(
+        (c) => c.name === "parseMode",
+      )
+    )
+      this.db.exec("ALTER TABLE deliveries ADD COLUMN parseMode TEXT");
     this.db.exec(
       "UPDATE actions SET state='uncertain' WHERE state='running'; UPDATE deliveries SET state='uncertain' WHERE state='sending'; UPDATE command_receipts SET state='uncertain' WHERE state='pending';",
     );
@@ -71,6 +79,49 @@ export class Store {
   }
   run(sql: string, ...args: (string | number | null)[]) {
     return this.db.prepare(sql).run(...args);
+  }
+  queueTelegram(
+    prefix: string,
+    chat: string,
+    text: string,
+    legacyLimit = 3500,
+  ) {
+    // A request partially queued by the previous version must retain its old
+    // boundaries and plain-text payloads; changing them could repeat content.
+    const prior = this.all<Delivery>(
+      "SELECT * FROM deliveries WHERE substr(id,1,?)=? ORDER BY rowid",
+      prefix.length + 1,
+      `${prefix}:`,
+    );
+    const legacy = prior.some((row) => row.parseMode === null);
+    const chunks: string[] = [];
+    if (legacy) {
+      for (let offset = 0; offset < text.length;) {
+        let end = Math.min(offset + legacyLimit, text.length);
+        if (end < text.length && /[\uD800-\uDBFF]/.test(text[end - 1])) end--;
+        chunks.push(text.slice(offset, end));
+        offset = end;
+      }
+    } else chunks.push(...formatTelegramMessage(text));
+    // Commands already commit their receipt and acknowledgement together.
+    // A savepoint keeps this batch atomic both inside and outside that transaction.
+    this.db.exec("SAVEPOINT telegram_delivery_batch");
+    try {
+      chunks.forEach((chunk, index) =>
+        this.run(
+          "INSERT OR IGNORE INTO deliveries(id,chat,text,parseMode) VALUES (?,?,?,?)",
+          `${prefix}:${index}`,
+          chat,
+          chunk,
+          legacy ? null : "HTML",
+        ),
+      );
+      this.db.exec("RELEASE SAVEPOINT telegram_delivery_batch");
+    } catch (error) {
+      this.db.exec("ROLLBACK TO SAVEPOINT telegram_delivery_batch");
+      this.db.exec("RELEASE SAVEPOINT telegram_delivery_batch");
+      throw error;
+    }
   }
   actions(conversationId: string) {
     return this.all<Action>(

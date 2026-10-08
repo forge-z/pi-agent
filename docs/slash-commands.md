@@ -23,6 +23,8 @@ Na nova conexão, o operador informa o próprio ID numérico no diálogo Telegra
 
 `/tasks` e `/crons` usam o mesmo conjunto autorizado. Atualizações repetidas são vinculadas a usuário, chat e conteúdo por recibos persistidos; um `update_id` reapresentado com outro conteúdo ou identidade é recusado. Os comandos existentes `/link CODIGO`, `/approve ID` e `/deny ID` continuam disponíveis no Telegram. O fluxo com contas reais não foi validado neste ambiente.
 
+O catálogo de oito comandos também é registrado no menu nativo do Telegram (`/`) depois do vínculo do chat privado. O registro usa `getMyCommands` e `setMyCommands` apenas nesse chat, com português, língua do usuário e fallback padrão. Menus globais, de grupos e de outros chats permanecem intactos. Um menu alheio existente é preservado e aparece como conflito no diálogo Telegram. A sincronização verifica o estado após reiniciar e não repete uma escrita incerta sem nova conexão explícita. Os comandos de vínculo e aprovação continuam aceitos, mas ficam fora das oito sugestões porque dependem de códigos ou IDs específicos.
+
 ### Conexão e migração
 
 Abra o botão **Telegram** no cabeçalho da conversa, escolha a conversa atual como destino e confira a prévia. Informe o token e seu ID numérico de usuário, então selecione **Conectar**. O diálogo valida o token com `getMe`, consulta `getWebhookInfo` e, quando o polling pode começar, faz uma consulta inicial bem-sucedida com timeout zero antes de buscar updates `message` em long polling de 25 segundos. Veja a [referência oficial de `getUpdates`](https://core.telegram.org/bots/api#getupdates).

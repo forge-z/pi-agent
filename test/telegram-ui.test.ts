@@ -15,6 +15,11 @@ type Snapshot = {
   webhookUrl: string | null;
   webhookVersion: string | null;
   awaitingFirstMessage: boolean;
+  commandMenu?: {
+    state:
+      "waiting" | "syncing" | "ready" | "retrying" | "conflict" | "uncertain";
+    message: string;
+  };
 };
 
 type ApiCall = {
@@ -158,6 +163,7 @@ function fixture(
     "telegram-state",
     "telegram-bot",
     "telegram-last-success",
+    "telegram-command-menu-status",
     "telegram-open-bot",
     "telegram-linked",
     "telegram-linked-title",
@@ -292,6 +298,7 @@ test("token is never returned by status, and successful connection clears the fi
     assert.equal(connect.data?.replaceWebhook, undefined);
     assert.match(String(connect.data?.requestId), /^[0-9a-f-]{36}$/i);
     assert.equal(ui.element("telegram-token").value, "");
+    assert.equal(ui.element("telegram-command-menu-status").hidden, true);
     assert.ok(ui.statusReads.every((status) => !("token" in status)));
     assert.doesNotMatch(
       JSON.stringify(ui.statusReads),
@@ -591,6 +598,85 @@ test("first-message guidance stays visible through connect and status polling", 
     );
     assert.equal(ui.element("telegram-first-message").hidden, true);
     assert.equal(ui.element("telegram-first-message").textContent, "");
+  } finally {
+    await ui.close();
+    ui.restore();
+  }
+});
+
+test("command menu status follows snapshots without inferring readiness from connection", async () => {
+  let currentStatus = snapshot({
+    state: "connected",
+    configured: true,
+    hasToken: true,
+    userId: "42",
+    conversationId: "active-conversation",
+    conversationTitle: "Conversa ativa",
+    bot: { id: 907, username: "sample_agent_bot" },
+    commandMenu: {
+      state: "syncing",
+      message: "Aguardando registro do menu de comandos.",
+    },
+  });
+  const ui = fixture((_elements, _calls, statusReads) => async () => {
+    statusReads.push(structuredClone(currentStatus));
+    return structuredClone(currentStatus);
+  });
+
+  try {
+    await ui.open();
+    await waitFor(
+      () => ui.element("telegram-command-menu-status").hidden === false,
+      "command menu status did not render",
+    );
+    assert.equal(ui.element("telegram-state").textContent, "Conectado");
+    assert.equal(
+      ui.element("telegram-command-menu-status").dataset.state,
+      "syncing",
+    );
+    assert.equal(
+      ui.element("telegram-command-menu-status").textContent,
+      "Aguardando registro do menu de comandos.",
+    );
+
+    currentStatus = snapshot({
+      ...currentStatus,
+      commandMenu: {
+        state: "ready",
+        message: "Menu de comandos registrado; aguardando mensagem privada.",
+      },
+    });
+    const timer = ui.timers.find((entry) => entry.delay === 3000);
+    assert.ok(timer);
+    timer.callback();
+    await waitFor(() => ui.statusReads.length === 2, "status did not poll");
+    assert.equal(ui.element("telegram-state").textContent, "Conectado");
+    assert.equal(
+      ui.element("telegram-command-menu-status").dataset.state,
+      "ready",
+    );
+    assert.equal(
+      ui.element("telegram-command-menu-status").textContent,
+      "Menu de comandos registrado; aguardando mensagem privada.",
+    );
+
+    currentStatus = snapshot({
+      ...currentStatus,
+      commandMenu: {
+        state: "conflict",
+        message: "Menu existente preservado.",
+      },
+    });
+    timer.callback();
+    await waitFor(() => ui.statusReads.length === 3, "conflict did not poll");
+    assert.equal(
+      ui.element("telegram-command-menu-status").dataset.state,
+      "conflict",
+    );
+    assert.equal(
+      ui.element("telegram-command-menu-status").textContent,
+      "Menu existente preservado.",
+    );
   } finally {
     await ui.close();
     ui.restore();

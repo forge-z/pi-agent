@@ -12,7 +12,7 @@ import {
 import type { FauxResponseStep } from "@earendil-works/pi-ai";
 import { Runtime } from "../src/runtime.js";
 import { Telegram } from "../src/telegram.js";
-import { Store } from "../src/store.js";
+import { Store, type Delivery } from "../src/store.js";
 const gateway = {
   call: async () => ({ content: [{ type: "text", text: "context" }] }),
 };
@@ -30,6 +30,38 @@ async function wait(app: Runtime, id: string) {
   await (await app.conversation(id)).waitForIdle(context);
   await new Promise((resolve) => setTimeout(resolve, 20));
 }
+
+test("Durable assistant answers persist formatted Telegram chunks before delivery and deduplicate after restart", async () => {
+  const dir = await temp();
+  const answer = `# Resumo\n\n**${"conteúdo & < > ".repeat(700)}**\n\n[Site](https://example.com)\n\n\`\`\`ts\nconst x = 1;\n\`\`\``;
+  const { models, faux } = model([fauxAssistantMessage(answer)]);
+  let app = await Runtime.open({ dir, gateway, models });
+  try {
+    const id = await app.create();
+    await app.submit(id, "formatted", "resuma", "telegram", "42");
+    await wait(app, id);
+    const rows = app.store.all<Delivery>(
+      "SELECT * FROM deliveries ORDER BY rowid",
+    );
+    assert.ok(rows.length > 2);
+    assert.ok(rows.every((row) => row.parseMode === "HTML"));
+    assert.match(rows[0].text, /<b>Resumo<\/b>/);
+    assert.match(rows[0].text, /&amp; &lt; &gt;/);
+    assert.match(rows.at(-1)!.text, /<pre><code>const x = 1;<\/code><\/pre>/);
+    await app.close();
+    app = await Runtime.open({ dir, gateway, models });
+    await app.submit(id, "formatted", "resuma", "telegram", "42");
+    await wait(app, id);
+    assert.deepEqual(
+      app.store.all<Delivery>("SELECT * FROM deliveries ORDER BY rowid"),
+      rows,
+    );
+    assert.equal(faux.state.callCount, 1);
+  } finally {
+    await app.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
 
 test("concurrent web/Telegram inputs serialize and same requestId deduplicates across reopen", async () => {
   const dir = await temp();

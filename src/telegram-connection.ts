@@ -4,13 +4,23 @@ import type { Runtime } from "./runtime.js";
 import { hash } from "./store.js";
 import { CommandError } from "./commands.js";
 import {
+  TelegramCommandMenu,
+  type TelegramCommandMenuStatus,
+} from "./telegram-commands.js";
+import {
   Telegram,
   TelegramInputError,
   type TelegramUpdate,
 } from "./telegram.js";
 
 type Method =
-  "getMe" | "getWebhookInfo" | "getUpdates" | "deleteWebhook" | "sendMessage";
+  | "getMe"
+  | "getWebhookInfo"
+  | "getUpdates"
+  | "deleteWebhook"
+  | "sendMessage"
+  | "getMyCommands"
+  | "setMyCommands";
 export interface TelegramApi {
   call(
     method: Method,
@@ -95,6 +105,7 @@ interface Config {
   userId: string;
   conversationId: string;
   chatId: string | null;
+  languageCode?: string;
 }
 export interface TelegramSnapshot {
   state:
@@ -117,6 +128,7 @@ export interface TelegramSnapshot {
   error: string | null;
   webhookUrl: string | null;
   webhookVersion: string | null;
+  commandMenu: TelegramCommandMenuStatus;
 }
 export interface TelegramConnectionOptions {
   apiFactory?: (token: string) => TelegramApi;
@@ -147,6 +159,7 @@ const pause = (ms: number, signal: AbortSignal) =>
 
 /** One owner, one polling loop. Setup receipts never contain tokens or webhook URLs. */
 export class TelegramConnection {
+  private commandMenu: TelegramCommandMenu;
   private config: Config | undefined;
   private candidate:
     Pick<Config, "bot" | "userId" | "conversationId"> | undefined;
@@ -167,6 +180,10 @@ export class TelegramConnection {
     private app: Runtime,
     private options: TelegramConnectionOptions = {},
   ) {
+    this.commandMenu = new TelegramCommandMenu(
+      app.store,
+      this.options.retryBaseMs ?? 30000,
+    );
     app.store.db.exec(
       "CREATE TABLE IF NOT EXISTS telegram_poll_receipts(botId INTEGER, id INTEGER, fingerprint TEXT NOT NULL, state TEXT NOT NULL, PRIMARY KEY(botId,id))",
     );
@@ -258,6 +275,7 @@ export class TelegramConnection {
       error: this.error,
       webhookUrl: this.webhookUrl,
       webhookVersion: this.webhookVersion,
+      commandMenu: this.commandMenu.status,
     };
   }
   restore() {
@@ -419,6 +437,7 @@ export class TelegramConnection {
         this.candidate = undefined;
         this.webhookUrl = null;
         this.webhookVersion = null;
+        this.commandMenu.newConnection();
         await this.start(token);
       } catch (error) {
         this.config = this.meta<Config>(configKey);
@@ -535,8 +554,18 @@ export class TelegramConnection {
         const engine = new Telegram(
           this.app,
           {
-            send: (chat, text) =>
-              api.call("sendMessage", { chat_id: chat, text }, signal),
+            send: (chat, text, options) =>
+              api.call(
+                "sendMessage",
+                {
+                  chat_id: chat,
+                  text,
+                  ...(options?.parseMode
+                    ? { parse_mode: options.parseMode }
+                    : {}),
+                },
+                signal,
+              ),
           },
           [config.userId],
           config.chatId ? [config.chatId] : [],
@@ -576,6 +605,15 @@ export class TelegramConnection {
             signal.throwIfAborted();
             await this.consume(value, engine, signal);
           }
+          await this.commandMenu.sync(
+            api,
+            {
+              botId: bot.id,
+              chatId: this.config!.chatId,
+              languageCode: this.config!.languageCode,
+            },
+            signal,
+          );
           await engine.flush();
           failures = 0;
           // Avoid a tight loop if a server/proxy returns empty long polls immediately.
@@ -654,8 +692,15 @@ export class TelegramConnection {
       message.chat.id > 0
     ) {
       const chat = String(message.chat.id);
+      const languageCode = /^([a-z]{2})(?:[-_]|$)/i
+        .exec(message.from.language_code ?? "")?.[1]
+        ?.toLowerCase();
       if (!config.chatId) {
-        const bound = { ...config, chatId: chat };
+        const bound = {
+          ...config,
+          chatId: chat,
+          ...(languageCode ? { languageCode } : {}),
+        };
         this.app.store.db.exec("BEGIN IMMEDIATE");
         try {
           this.app.store.run(
@@ -678,6 +723,14 @@ export class TelegramConnection {
           this.app.store.db.exec("ROLLBACK");
           throw error;
         }
+      }
+      if (
+        this.config!.chatId === chat &&
+        languageCode &&
+        languageCode !== this.config!.languageCode
+      ) {
+        this.config = { ...this.config!, languageCode };
+        this.save(configKey, this.config);
       }
       if (this.config!.chatId === chat) {
         try {

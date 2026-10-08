@@ -1,5 +1,19 @@
 # Verificação local do MVP
 
+## Compose, menu nativo e formatação Telegram
+
+Em 8 de outubro de 2026, na branch `fix/coolify-telegram-env`, baseada no `main` `0594892`: **149 testes passaram**, zero falhas, cancelamentos ou skips, em 33,70 segundos. Tipos, lint, build e `git diff --check` passaram com Node 26. O alvo do Dockerfile continua Node 24; o workflow verifica Docker/Compose no GitHub. As seções abaixo registram verificações de versões anteriores.
+
+A regressão Compose falhou antes da remoção das referências legadas e passou depois: nem o arquivo padrão nem o override de senha declaram variáveis ou secrets Telegram. O gate de CI também verifica `docker compose config --variables` e o ambiente/secrets do Compose renderizado. A senha web, origem, provider, MCP e volume não mudaram. A atualização da definição Compose no Coolify precede a exclusão das variáveis antigas.
+
+O menu é exercitado com `getMyCommands`/`setMyCommands` simulados: somente a primeira DM autorizada permite registrar; grupos e outros usuários não registram; menus globais e alheios do chat privado são preservados; leituras falhas não bloqueiam a admissão; resultado de escrita perdido é consultado após reiniciar sem replay cego. A UI diferencia conexão de prontidão do menu e acompanha o estado em polling.
+
+A formatação cobre negrito/itálico/tachado, títulos, listas, links, código inline/blocos, HTML malicioso, caracteres especiais, conteúdo longo e limites exatos de chunk. Código fica fora das tags de estilo; tags são balanceadas em cada parte, entidades e surrogate pairs ficam inteiros e partes finais só com whitespace são descartadas. O teste com provider faux verifica que o texto real do Durable gera filas HTML persistidas e não duplica após reiniciar. A migração de SQLite preserva filas antigas e entregas incertas; uma falha de armazenamento reverte o lote. Testes de comandos cobrem a gravação conjunta do recibo e fila formatada dentro da transação existente. Ambos os transportes enviam `parse_mode=HTML` somente para payloads novos; falhas de envio nunca causam fallback nem segunda cópia.
+
+No navegador integrado, a prévia em loopback com base descartável exibiu **Conectado**, **Menu de comandos registrado** e token vazio. Nenhuma conta ou mensagem real foi usada, nenhum link do bot foi aberto e nenhum deploy foi feito.
+
+![Menu nativo pronto na prévia com bot simulado](evidence/telegram-menu/ready-desktop.jpg)
+
 ## Polling privado Telegram e recuperação de sessão MCP
 
 Em 8 de outubro de 2026, na branch local `feat/telegram-private-polling`, baseada em `7ec5878`: **131 testes passaram**, zero falhas, cancelamentos ou skips, em 33,77 segundos. Tipos, lint, build, sintaxe dos scripts, YAML do Compose e `git diff --check` também passaram. A execução usou Node 26.0.0. O Dockerfile mantém Node 24; Docker não está disponível nesta máquina, portanto o container desta revisão não foi reconstruído.
