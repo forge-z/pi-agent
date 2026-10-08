@@ -712,7 +712,7 @@ $("message-form").onsubmit = guard(async (event) => {
   event.preventDefault();
   const content = $("message").value;
   const sentConversation = conversationId;
-  if (!content.trim() || !conversationId) return;
+  if ($("send").disabled || !content.trim() || !conversationId) return;
   if (
     !pendingMessage ||
     pendingMessage.text !== content ||
@@ -829,14 +829,41 @@ document.querySelectorAll("[data-prompt]").forEach((button) => {
     $("message").focus();
   };
 });
+let messageComposing = false;
+$("message").addEventListener("compositionstart", () => {
+  messageComposing = true;
+});
+$("message").addEventListener("compositionend", () => {
+  messageComposing = false;
+});
 $("message").addEventListener("keydown", (event) => {
   if (
-    event.key === "Enter" &&
-    (event.metaKey || event.ctrlKey) &&
-    !event.isComposing
-  ) {
+    event.key !== "Enter" ||
+    messageComposing ||
+    event.isComposing ||
+    event.keyCode === 229
+  )
+    return;
+  if (event.ctrlKey && !event.metaKey) {
     event.preventDefault();
-    if (!$("send").disabled) $("message-form").requestSubmit();
+    const message = $("message");
+    const length =
+      message.value.length - (message.selectionEnd - message.selectionStart);
+    if (message.maxLength >= 0 && length >= message.maxLength) return;
+    message.setRangeText(
+      "\n",
+      message.selectionStart,
+      message.selectionEnd,
+      "end",
+    );
+    message.dispatchEvent(new Event("input", { bubbles: true }));
+    return;
+  }
+  // Cmd+Enter keeps its existing send behavior; Shift/Alt+Enter stay native.
+  if (event.metaKey || (!event.shiftKey && !event.altKey)) {
+    event.preventDefault();
+    if (!event.repeat && !$("send").disabled && $("message").value.trim())
+      $("message-form").requestSubmit();
   }
 });
 if ("serviceWorker" in navigator)

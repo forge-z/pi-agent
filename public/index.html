@@ -436,7 +436,7 @@
                 placeholder="Conte ao Pi o que está na sua cabeça…"
                 required
                 maxlength="32000"
-                aria-describedby="composer-hint"
+                aria-describedby="composer-hint composer-shortcuts"
               ></textarea>
               <div class="composer-toolbar">
                 <span class="composer-identity"
@@ -453,13 +453,14 @@
                   >
                     Assistente pessoal
                   </button></span
-                ><span class="send-shortcut" aria-hidden="true"
-                  >⌘ / Ctrl + Enter</span
+                ><span id="composer-shortcuts" class="send-shortcut"
+                  >Enter envia · Ctrl + Enter nova linha</span
                 ><button
                   id="send"
                   type="submit"
                   aria-label="Enviar mensagem"
-                  title="Enviar mensagem"
+                  title="Enviar mensagem (Enter)"
+                  aria-keyshortcuts="Enter Meta+Enter"
                 >
                   <svg class="icon" aria-hidden="true">
                     <use href="/icons.svg#arrow-up" />
