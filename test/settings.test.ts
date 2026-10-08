@@ -247,7 +247,61 @@ test("settings endpoints require web session and same origin; MCP discovery expo
       enabled: false,
     });
     assert.equal(created.status, 201);
-    const task = (await created.json()) as { id: string };
+    const task = (await created.json()) as {
+      id: string;
+      delivery: string;
+      nextRun: number | null;
+    };
+    assert.equal(task.delivery, "web");
+    assert.deepEqual(
+      await (await request(
+        `/api/tasks/telegram-availability?conversationId=${encodeURIComponent(conversationId)}`,
+      )).json(),
+      { available: false },
+    );
+    assert.equal(
+      (
+        await request(`/api/tasks/${task.id}`, "PUT", {
+          delivery: "web_telegram",
+        })
+      ).status,
+      400,
+    );
+    const binding = {
+      enabled: true,
+      bot: { id: 123456 },
+      userId: "42",
+      chatId: "42",
+      conversationId,
+    };
+    app.store.run("INSERT INTO telegram VALUES (?,?,?)", "42", conversationId, "42");
+    app.store.run(
+      "INSERT INTO telegram_grants VALUES (?,?,?)",
+      "42",
+      "42",
+      conversationId,
+    );
+    app.store.run(
+      "INSERT INTO meta VALUES (?,?)",
+      "telegram:connection",
+      JSON.stringify(binding),
+    );
+    assert.deepEqual(
+      await (await request(
+        `/api/tasks/telegram-availability?conversationId=${encodeURIComponent(conversationId)}`,
+      )).json(),
+      { available: true },
+    );
+    const deliveryUpdate = await request(`/api/tasks/${task.id}`, "PUT", {
+      delivery: "web_telegram",
+    });
+    assert.equal(deliveryUpdate.status, 200);
+    assert.equal((await deliveryUpdate.json()).delivery, "web_telegram");
+    const webUpdate = await request(`/api/tasks/${task.id}`, "PUT", {
+      delivery: "web",
+    });
+    assert.equal(webUpdate.status, 200);
+    assert.equal((await webUpdate.json()).delivery, "web");
     const first = await request(`/api/tasks/${task.id}/run`, "POST", {
       requestId: "manual-click-one",
     });

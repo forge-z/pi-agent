@@ -30,6 +30,7 @@ const daily = {
 test("model receives task tools and creates/lists the same durable schedule used by the UI", async () => {
   const dir = await mkdtemp(join(tmpdir(), "pi-chat-tasks-"));
   const faux = fauxProvider();
+  let taskId = "";
   faux.setResponses([
     async (transcript) => {
       const names = getCurrentTools(transcript.messages).map(
@@ -40,12 +41,14 @@ test("model receives task tools and creates/lists the same durable schedule used
         "tasks_create missing from actual model request",
       );
       assert.ok(names.includes("tasks_list"));
+      assert.ok(names.includes("tasks_set_delivery"));
+      assert.match(JSON.stringify(getCurrentTools(transcript.messages)), /web_telegram/);
       return fauxAssistantMessage(
         {
           type: "toolCall",
           id: "create",
           name: "tasks_create",
-          arguments: daily,
+          arguments: { ...daily, delivery: "web_telegram" },
         },
         { stopReason: "toolUse" },
       );
@@ -55,12 +58,41 @@ test("model receives task tools and creates/lists the same durable schedule used
       { stopReason: "toolUse" },
     ),
     fauxAssistantMessage("Agenda criada após a confirmação da ferramenta."),
+    async (transcript) => {
+      const names = getCurrentTools(transcript.messages).map(
+        (tool) => tool.name,
+      );
+      assert.ok(names.includes("tasks_set_delivery"));
+      return fauxAssistantMessage(
+        {
+          type: "toolCall",
+          id: "set-delivery",
+          name: "tasks_set_delivery",
+          arguments: { taskId, delivery: "web" },
+        },
+        { stopReason: "toolUse" },
+      );
+    },
+    fauxAssistantMessage("Destino alterado para web."),
   ]);
   const models = createModels();
   models.setProvider(faux.provider);
   let app = await Runtime.open({ dir, gateway, models });
   try {
     const id = await app.create();
+    app.store.run("INSERT INTO telegram VALUES (?,?,?)", "42", id, "42");
+    app.store.run("INSERT INTO telegram_grants VALUES (?,?,?)", "42", "42", id);
+    app.store.run(
+      "INSERT INTO meta VALUES (?,?)",
+      "telegram:connection",
+      JSON.stringify({
+        enabled: true,
+        bot: { id: 123456 },
+        userId: "42",
+        chatId: "42",
+        conversationId: id,
+      }),
+    );
     const names = (await (await app.conversation(id)).agent(context)).tools.map(
       (tool) => tool.name,
     );
@@ -68,11 +100,12 @@ test("model receives task tools and creates/lists the same durable schedule used
       names.includes("tasks_create"),
       "internal task tools must be available without MCP configuration",
     );
-    await app.submit(id, "daily", "Crie um resumo diário às 8h em Brasília");
+    await app.submit(id, "daily", "Crie um resumo diário às 8h em Brasília e entregue no Telegram");
     await (await app.conversation(id)).waitForIdle(context);
     const tasks = new Tasks(app);
-    const [task] = tasks.list();
+    let task = tasks.list()[0]!;
     assert.equal(tasks.list().length, 1);
+    assert.equal(task.delivery, "web_telegram");
     assert.equal(task.conversationId, id);
     assert.equal(task.schedule, daily.schedule);
     assert.equal(task.timezone, daily.timezone);
@@ -89,6 +122,11 @@ test("model receives task tools and creates/lists the same durable schedule used
       JSON.stringify(entries).includes(task.id),
       "tool results must contain the persisted task ID",
     );
+    taskId = task.id;
+    await app.submit(id, "change-delivery", "Change that task so it only stays in the web conversation");
+    await (await app.conversation(id)).waitForIdle(context);
+    assert.equal(app.tasks.list()[0]?.delivery, "web");
+    task = tasks.list()[0]!;
     await tasks.close();
     await app.close();
     app = await Runtime.open({ dir, gateway, models });

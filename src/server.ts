@@ -229,6 +229,14 @@ export function createAppServer(app: Runtime, options: ServerOptions) {
           if (method === "POST")
             return json(response, 201, await tasks.create(await body(request)));
         }
+        if (path === "/api/tasks/telegram-availability" && method === "GET") {
+          const conversationId = url.searchParams.get("conversationId");
+          if (!conversationId)
+            throw new HttpError(400, "Informe a conversa da tarefa");
+          return json(response, 200, {
+            available: tasks.telegramAvailability(conversationId),
+          });
+        }
         const taskRoute = /^\/api\/tasks\/([a-f0-9-]+)(?:\/(run|runs))?$/.exec(
           path,
         );
@@ -247,9 +255,7 @@ export function createAppServer(app: Runtime, options: ServerOptions) {
           }
           if (!resource && method === "PUT") {
             const input = await body(request);
-            if (typeof input.enabled !== "boolean")
-              throw new HttpError(400, "Informe se a tarefa está ativa");
-            return json(response, 200, tasks.setEnabled(id, input.enabled));
+            return json(response, 200, tasks.update(id, input));
           }
           if (!resource && method === "DELETE") {
             tasks.remove(id);
