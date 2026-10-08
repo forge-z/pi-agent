@@ -39,6 +39,17 @@ const testDocument = {
   createTextNode: (text: string) => new TestNode("#text", text),
 };
 
+test("handoff links preserve the chat tab and isolate the external viewer", () => {
+  const fragment = renderMarkdown(
+    "Acesse [Abrir acesso seguro](https://example.invalid/handoff).",
+    testDocument,
+  );
+  const link = find(fragment, "a");
+  assert.ok(link);
+  assert.equal(link.attributes.get("target"), "_blank");
+  assert.equal(link.attributes.get("rel"), "noopener noreferrer");
+});
+
 test("renders paragraphs, headings, emphasis, inline and fenced code", () => {
   const fragment = renderMarkdown(
     "# Heading\n\nFirst **bold** and *italic* with `code` and \\* escaped.\n\n```js\nconst x = 1;\n```",

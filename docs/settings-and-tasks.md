@@ -6,6 +6,14 @@ Abra **Configurações** no menu lateral. O seletor próximo ao compositor alter
 
 O catálogo vem do provider registrado no Pi AI e os esforços são obtidos por `getSupportedThinkingLevels`. Um ID no catálogo não garante acesso por sua conta ChatGPT. Em modo demo, aparece somente o modelo local; `APP_MODE=live` habilita o catálogo OpenAI. A conexão ChatGPT continua independente da senha web.
 
+## Detalhes de ferramentas
+
+O botão **Ferramentas** no cabeçalho mostra ou oculta chamadas e resultados comuns da conversa. No celular ele usa o ícone de plugue, com nome acessível e alvo de toque de 44 px. O estado pressionado indica que os detalhes estão visíveis. A preferência é salva neste navegador e vale para o histórico e as novas atualizações; se o armazenamento estiver bloqueado, funciona durante a sessão aberta.
+
+Respostas do Pi, aprovações, solicitações de interação MCP, erros e resultados que declaram pausa, espera ou incerteza continuam visíveis. Ocultar detalhes não cancela nem autoriza uma ferramenta. As chamadas mostram os argumentos como texto recolhível; o controle não altera o contexto enviado ao modelo.
+
+Links HTTP(S) nas respostas abrem em outra aba, com `noopener noreferrer`, preservando a conversa. Uma etapa manual no viewer não aceita nem retoma uma interação MCP automaticamente: volte ao Pi para decidir pelo controle explícito da solicitação.
+
 ## MCP
 
 Cadastre um nome, endpoint MCP HTTP(S) e, quando necessário, bearer token. HTTPS é obrigatório fora de loopback. O transporte principal é Streamable HTTP; diante de resposta 404 ou 405, o cliente tenta o transporte legado SSE. Esta versão não oferece transporte `stdio`. Salvar um servidor não executa ferramentas. **Descobrir ferramentas** consulta automaticamente as páginas do catálogo, até 2.000 ferramentas e 100 cursores; uma falha de descoberta fica isolada naquele servidor e não esconde os demais.

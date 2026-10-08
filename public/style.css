@@ -823,6 +823,14 @@ main {
   width: 18px;
   height: 18px;
 }
+#tool-visibility-button {
+  min-height: 44px;
+}
+#tool-visibility-button[aria-pressed="true"] {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-color: var(--line-strong);
+}
 .banner {
   display: flex;
   align-items: center;
@@ -2119,16 +2127,19 @@ dialog .fine {
     height: 6px;
     margin-right: 10px;
   }
-  #telegram-button {
+  #telegram-button,
+  #tool-visibility-button {
     padding: 10px;
     min-height: 44px;
     width: 44px;
     border-color: var(--line);
   }
-  #telegram-button span {
+  #telegram-button span,
+  #tool-visibility-button span {
     display: none;
   }
-  #telegram-button .icon {
+  #telegram-button .icon,
+  #tool-visibility-button .icon {
     width: 20px;
     height: 20px;
   }
