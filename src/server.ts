@@ -516,6 +516,7 @@ export function createAppServer(app: Runtime, options: ServerOptions) {
         "/settings.js": ["settings.js", "text/javascript"],
         "/telegram.js": ["telegram.js", "text/javascript"],
         "/tools.js": ["tools.js", "text/javascript"],
+        "/history.js": ["history.js", "text/javascript"],
         "/style.css": ["style.css", "text/css"],
         "/manifest.webmanifest": [
           "manifest.webmanifest",

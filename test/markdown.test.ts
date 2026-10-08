@@ -27,7 +27,7 @@ const rendererSource = readFileSync(
   "utf8",
 )
   .replace(/^import \{ lexer \} from "\/marked\.js";\s*/m, "")
-  .replace("export function renderMarkdown", "function renderMarkdown");
+  .replaceAll("export function ", "function ");
 const renderMarkdown = runInNewContext(`${rendererSource}\nrenderMarkdown`, {
   lexer,
   URL,
@@ -156,3 +156,35 @@ function findAll(root: TestNode, tag: string): TestNode[] {
     ...root.children.flatMap((child) => findAll(child, tag)),
   ];
 }
+
+test("large base64 results bypass Markdown without overflowing the parser stack", () => {
+  const source = JSON.stringify({
+    result: { content: [{ type: "image", data: "A".repeat(4 * 1024 * 1024) }] },
+  });
+  const fragment = renderMarkdown(source, testDocument);
+  const pre = find(fragment, "pre");
+  assert.ok(pre);
+  assert.equal(pre.textContent.length, 32768);
+  assert.ok(find(fragment, "button"));
+  assert.match(fragment.textContent, /conteúdo completo permanece salvo/);
+});
+
+test("parser failure falls back to inert bounded text without losing following messages", () => {
+  const safeRender = runInNewContext(`${rendererSource}\nrenderMarkdown`, {
+    lexer: () => {
+      throw new RangeError("Synthetic parser stack overflow");
+    },
+    URL,
+  }) as typeof renderMarkdown;
+  const source = "<script>private()</script> **partial";
+  const fragment = safeRender(source, testDocument);
+  assert.equal(find(fragment, "pre")?.textContent, source);
+  assert.equal(find(fragment, "script"), undefined);
+});
+
+test("dense Markdown below the byte limit cannot build an unbounded token DOM", () => {
+  const source = "**word** ".repeat(3000);
+  const fragment = renderMarkdown(source, testDocument);
+  assert.equal(find(fragment, "pre")?.textContent, source);
+  assert.ok(tags(fragment).length < 5);
+});
