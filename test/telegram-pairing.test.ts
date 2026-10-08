@@ -1,9 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { runInNewContext } from "node:vm";
 import { createModels } from "@earendil-works/pi-ai/models";
 import {
   fauxAssistantMessage,
@@ -63,7 +62,7 @@ async function fixture() {
   };
 }
 
-test("web pairing copy handler -> authenticated link API -> Telegram webhook binds once without calling the model", async () => {
+test("legacy authenticated link API -> explicitly injected webhook binds once without calling the model", async () => {
   const f = await fixture();
   const origin = "http://127.0.0.1:3000";
   const web = createAppServer(f.app, {
@@ -96,58 +95,12 @@ test("web pairing copy handler -> authenticated link API -> Telegram webhook bin
     });
     cookie = login.headers.get("set-cookie")!.split(";")[0];
     const id = await f.app.create("Conversa web");
-    const nodes = new Map<
-      string,
-      {
-        textContent: string;
-        hidden: boolean;
-        href: string;
-        onclick?: () => Promise<void>;
-        showModal(): void;
-        querySelector(): { textContent: string };
-      }
-    >();
-    const $ = (key: string) => {
-      if (!nodes.has(key))
-        nodes.set(key, {
-          textContent: "",
-          hidden: true,
-          href: "",
-          showModal() {},
-          querySelector() {
-            return this;
-          },
-        });
-      return nodes.get(key)!;
-    };
-    let copied = "";
-    const source = await readFile("public/app.js", "utf8");
-    const handlers = source.slice(
-      source.indexOf('$("link-button").onclick'),
-      source.indexOf('$("provider-button").onclick'),
-    );
-    runInNewContext(handlers, {
-      $,
-      conversationId: id,
-      guard: (fn: unknown) => fn,
-      navigator: {
-        clipboard: {
-          writeText: async (text: string) => {
-            copied = text;
-          },
-        },
-      },
-      api: async (path: string, _method: string, data: unknown) => {
-        const response = await request(path, data);
-        assert.equal(response.status, 201);
-        return response.json();
-      },
-    });
-    await $("link-button").onclick!();
-    await $("copy-link").onclick!();
+    const pairing = await request(`/api/conversations/${id}/link`, {});
+    assert.equal(pairing.status, 201);
+    const payload = (await pairing.json()) as { command: string; url: string };
+    const copied = payload.command;
     assert.match(copied, /^\/link [a-f0-9]{32}$/);
-    assert.equal($("open-telegram").hidden, false);
-    const deepLink = new URL($("open-telegram").href);
+    const deepLink = new URL(payload.url);
     assert.equal(deepLink.hostname, "t.me");
     assert.equal(deepLink.pathname, "/test_pi_bot");
     assert.equal(deepLink.searchParams.get("start"), copied.slice(6));

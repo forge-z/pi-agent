@@ -137,7 +137,7 @@ export class Store {
 export const hash = (value: string) =>
   createHash("sha256").update(value).digest("hex");
 
-/** Pi owns OAuth/login/refresh. This app persists only credentials it issues via that API. */
+/** Pi owns OAuth/login/refresh. Its adapter excludes the private Telegram credential. */
 export class SqlCredentials implements CredentialStore {
   private tails = new Map<string, Promise<unknown>>();
   constructor(private store: Store) {}
@@ -152,7 +152,9 @@ export class SqlCredentials implements CredentialStore {
   async list(options?: AuthOperationOptions) {
     options?.signal?.throwIfAborted();
     return this.store
-      .all<{ provider: string; value: string }>("SELECT * FROM credentials")
+      .all<{ provider: string; value: string }>(
+        "SELECT * FROM credentials WHERE provider <> 'telegram:bot'",
+      )
       .map((row) => ({
         providerId: row.provider,
         type: (JSON.parse(row.value) as Credential).type,

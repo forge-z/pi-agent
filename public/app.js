@@ -5,6 +5,7 @@ import {
   createSlashAutocomplete,
   refreshConversationSnapshot,
 } from "/commands.js";
+import { attachTelegramUI } from "/telegram.js";
 
 const $ = (id) => document.getElementById(id);
 let conversationId = null;
@@ -97,8 +98,11 @@ async function api(path, method = "GET", data) {
   if (response.status === 401 && path !== "/api/login") {
     showLogin();
   }
-  if (!response.ok)
-    throw new Error(result.error || "Falha ao acessar o servidor");
+  if (!response.ok) {
+    const error = new Error(result.error || "Falha ao acessar o servidor");
+    error.status = response.status;
+    throw error;
+  }
   return result;
 }
 function showLogin() {
@@ -1047,6 +1051,30 @@ function render(snapshot) {
   const uncertainCalls = (snapshot.mcpCalls || []).filter(
     (call) => call.state === "uncertain",
   );
+  const safeMcpErrors = new Set([
+    "MCP recusou a autenticação (HTTP 401). Verifique o token ou o método de login exigido pelo servidor.",
+    "MCP recusou a autenticação (HTTP 403). Verifique o token ou o método de login exigido pelo servidor.",
+    "Endpoint MCP incompatível ou não encontrado (HTTP 404). Confira o endpoint MCP completo.",
+    "Endpoint MCP incompatível ou não encontrado (HTTP 405). Confira o endpoint MCP completo.",
+    "Tempo de resposta MCP excedido. O resultado da chamada pode ser incerto.",
+    "Falha na conexão ou operação MCP. Confira endpoint, transporte e disponibilidade do servidor.",
+    "A sessão MCP expirou ou foi encerrada (HTTP 404). A chamada não foi reenviada; verifique o resultado no serviço. A próxima operação abrirá uma nova sessão.",
+    "Resultado MCP incerto. Verifique o serviço antes de tentar outra execução.",
+  ]);
+  const safeMcpErrorMessage = (result) => {
+    if (typeof result !== "string") return "";
+    try {
+      const parsed = JSON.parse(result);
+      if (parsed?.isError !== true || !Array.isArray(parsed.content)) return "";
+      const text = parsed.content
+        .filter((block) => block.type === "text")
+        .map((block) => block.text)
+        .join("\n");
+      return safeMcpErrors.has(text) ? text : "";
+    } catch {
+      return "";
+    }
+  };
   for (const call of uncertainCalls) {
     const callConversation = conversationId;
     const card = node("article", undefined, "action-card");
@@ -1054,9 +1082,11 @@ function render(snapshot) {
       node("strong", `${call.server} / ${call.tool}`),
       node(
         "p",
-        "Resultado incerto. A chamada não foi reenviada. Verifique no serviço e registre o resultado.",
+        "A chamada foi enviada, mas o efeito e o resultado não foram confirmados. Ela não será reenviada automaticamente. Verifique no serviço externo antes de registrar o resultado.",
       ),
     );
+    const safeError = safeMcpErrorMessage(call.result);
+    if (safeError) card.append(node("p", safeError, "action-note"));
     const form = node("form", undefined, "management-form");
     const input = node("input");
     input.required = true;
@@ -1214,23 +1244,6 @@ $("message-form").onsubmit = guard(async (event) => {
     $("send").disabled = false;
   }
 });
-$("link-button").onclick = guard(async () => {
-  const link = await api(
-    `/api/conversations/${conversationId}/link`,
-    "POST",
-    {},
-  );
-  $("copy-link").querySelector("span").textContent = "Copiar comando";
-  $("link-code").textContent = link.command;
-  $("open-telegram").hidden = !link.url;
-  if (link.url) $("open-telegram").href = link.url;
-  else $("open-telegram").removeAttribute("href");
-  $("link-dialog").showModal();
-});
-$("copy-link").onclick = guard(async () => {
-  await navigator.clipboard.writeText($("link-code").textContent);
-  $("copy-link").querySelector("span").textContent = "Comando copiado";
-});
 $("provider-button").onclick = guard(async () => {
   const flow = await api("/api/provider/login", "POST", {});
   providerFlow = flow.id;
@@ -1349,5 +1362,9 @@ const settingsUI = configureUI(api, {
   refreshStatus,
   selectConversation: select,
   refreshConversation: refreshCurrentConversation,
+});
+attachTelegramUI(api, {
+  getConversationId: () => conversationId,
+  getConversationTitle: () => $("conversation-title").textContent,
 });
 api("/api/status").then(workspace).catch(showLogin);
