@@ -36,6 +36,7 @@ import {
 import { McpCalls, type McpCall } from "./mcp-calls.js";
 import { Settings, SettingsError } from "./settings.js";
 import { Tasks, TaskError } from "./tasks.js";
+import { queueTaskTelegram } from "./task-telegram.js";
 import {
   Commands,
   CommandError,
@@ -140,7 +141,7 @@ export class Runtime {
             section(
               "scheduling",
               () =>
-                `Internal tools tasks_list and tasks_create manage the application's persisted agenda independently of MCP. Use tasks_list to inspect existing schedules. When the user explicitly requests a schedule, use tasks_create with the complete future prompt, a five-field cron or a future ISO date with offset, and the user's IANA timezone. Brasília time means America/Sao_Paulo. Ask for missing instructions, recurrence, or timezone rather than inventing them. Keep results in this conversation. Only claim a schedule was created after a successful tool result; report its ID, nextRun, recurrence and timezone. Scheduled runs and system notifications must never create further schedules. Scheduling a prompt does not authorize its future external effects: normal MCP permissions and action approvals still apply.`,
+                `Internal tools tasks_list, tasks_create, and tasks_set_delivery manage the application's persisted agenda independently of MCP. Use tasks_list to inspect existing schedules. When the user explicitly requests a schedule, use tasks_create with the complete future prompt, a five-field cron or a future ISO date with offset, and the user's IANA timezone. Brasília time means America/Sao_Paulo. Ask for missing instructions, recurrence, or timezone rather than inventing them. Results always stay in the web conversation. Use delivery=web_telegram only when the user explicitly requests a Telegram copy and this conversation has a current authorized Telegram binding; otherwise use delivery=web. Telegram delivery is revalidated when the run finishes and is not guaranteed if the binding changes. Use tasks_set_delivery only when the user explicitly asks to change a saved task's destination. Only claim a change after a successful tool result. Scheduled runs and system notifications must never create further schedules. Scheduling a prompt does not authorize its future external effects: normal MCP permissions and action approvals still apply.`,
               { tag: false },
             ),
             section(
@@ -154,7 +155,7 @@ export class Runtime {
             defineTool({
               name: "tasks_list",
               description:
-                "List the personal assistant's persisted agenda, including task IDs, recurrence, timezone and next run. Independent of MCP.",
+                "List the personal assistant's persisted agenda, including task IDs, recurrence, timezone, delivery destination and next run. Independent of MCP.",
               parameters: Type.Object({}),
               replay: "safe",
               execute: async () => ({
@@ -166,7 +167,7 @@ export class Runtime {
             defineTool({
               name: "tasks_create",
               description:
-                "Create a local scheduled assistant prompt explicitly requested by the user, delivering into the current conversation. Requires complete instructions and timezone; does not execute external effects now.",
+                "Create a local scheduled assistant prompt explicitly requested by the user. Results always stay in the web conversation; optionally request a Telegram copy with delivery=web_telegram, which requires this conversation's current authorized Telegram binding. Omission defaults to web only. Requires complete instructions and timezone; does not execute external effects now.",
               parameters: Type.Object({
                 title: Type.String({ minLength: 1, maxLength: 120 }),
                 prompt: Type.String({ minLength: 1, maxLength: 32000 }),
@@ -183,12 +184,42 @@ export class Runtime {
                   minLength: 1,
                   maxLength: 100,
                 }),
+                delivery: Type.Optional(
+                  Type.Union([
+                    Type.Literal("web"),
+                    Type.Literal("web_telegram"),
+                  ]),
+                ),
               }),
               replay: "safe",
               execute: async (args, api) => {
                 await app!.requireHumanInput(api);
                 const task = await app!.tasks.create(
                   { ...args, conversationId: String(api.conversationId) },
+                  `chat:${api.conversationId}:${api.taskId}`,
+                );
+                return {
+                  content: [{ type: "text", text: JSON.stringify(task) }],
+                };
+              },
+            }),
+            defineTool({
+              name: "tasks_set_delivery",
+              description:
+                "Change the saved delivery destination for one task explicitly selected by the user. Results remain in the web conversation; web_telegram adds a Telegram copy and requires the task conversation's current authorized binding.",
+              parameters: Type.Object({
+                taskId: Type.String({ minLength: 1, maxLength: 100 }),
+                delivery: Type.Union([
+                  Type.Literal("web"),
+                  Type.Literal("web_telegram"),
+                ]),
+              }),
+              replay: "safe",
+              execute: async (args, api) => {
+                await app!.requireHumanInput(api);
+                const task = app!.tasks.setDelivery(
+                  args.taskId,
+                  args.delivery,
                   `chat:${api.conversationId}:${api.taskId}`,
                 );
                 return {
@@ -552,32 +583,55 @@ export class Runtime {
       const monitor = (async () => {
         const settled = await submission.wait(context);
         if (this.closing) return;
-        if (settled.status === "done" && settled.type === "input" && chat) {
+        let answer = "";
+        if (
+          settled.status === "done" &&
+          settled.type === "input" &&
+          (chat || source === "task")
+        ) {
           const entries = await conversation.entries(
-            {},
-            1000,
+            { minEntryId: settled.answer, maxEntryId: settled.answer },
+            1,
             undefined,
             context,
           );
           const entry = entries.items.find((e) => e.id === settled.answer);
           const message = entry?.model?.[0];
-          const answer =
+          answer =
             message?.role === "assistant"
               ? message.content
                   .filter((c) => c.type === "text")
                   .map((c) => c.text)
                   .join("\n")
               : "";
-          if (answer) {
+          if (answer && chat) {
             this.store.queueTelegram(key, chat, answer);
           }
         }
-        this.store.run(
-          "UPDATE requests SET status=? WHERE conversationId=? AND requestId=?",
-          settled.status,
-          conversationId,
-          requestId,
-        );
+        this.store.db.exec("SAVEPOINT request_settlement");
+        try {
+          if (source === "task")
+            queueTaskTelegram(
+              this.store,
+              conversationId,
+              requestId,
+              settled.status === "done"
+                ? answer ||
+                    "Tarefa concluída sem resposta de texto. Consulte a conversa na web."
+                : "A tarefa não foi concluída. Consulte seu estado na conversa web.",
+            );
+          this.store.run(
+            "UPDATE requests SET status=? WHERE conversationId=? AND requestId=?",
+            settled.status,
+            conversationId,
+            requestId,
+          );
+          this.store.db.exec("RELEASE SAVEPOINT request_settlement");
+        } catch (error) {
+          this.store.db.exec("ROLLBACK TO SAVEPOINT request_settlement");
+          this.store.db.exec("RELEASE SAVEPOINT request_settlement");
+          throw error;
+        }
       })()
         .catch(() => {})
         .finally(() => this.monitors.delete(key));

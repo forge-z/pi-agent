@@ -39,6 +39,9 @@ export class Store {
   constructor(dir: string) {
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     this.db = new DatabaseSync(`${dir}/app.sqlite`);
+    const hadGrants = !!this.get(
+      "SELECT 1 FROM sqlite_master WHERE type='table' AND name='telegram_grants'",
+    );
     this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;
       CREATE TABLE IF NOT EXISTS conversations(id TEXT PRIMARY KEY, title TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS requests(conversationId TEXT, requestId TEXT, text TEXT, submissionId INTEGER, source TEXT, chat TEXT, status TEXT DEFAULT 'pending', PRIMARY KEY(conversationId,requestId));
@@ -48,13 +51,55 @@ export class Store {
       CREATE TABLE IF NOT EXISTS telegram(chat TEXT PRIMARY KEY, conversationId TEXT, user TEXT);
       CREATE TABLE IF NOT EXISTS telegram_grants(chat TEXT, user TEXT, conversationId TEXT, PRIMARY KEY(chat,user,conversationId));
       CREATE TABLE IF NOT EXISTS telegram_updates(id INTEGER PRIMARY KEY, fingerprint TEXT NOT NULL);
-      INSERT OR IGNORE INTO telegram_grants SELECT chat,user,conversationId FROM telegram;
       CREATE TABLE IF NOT EXISTS command_receipts(key TEXT PRIMARY KEY, conversationId TEXT NOT NULL, requestId TEXT NOT NULL, text TEXT NOT NULL, state TEXT NOT NULL, result TEXT);
       CREATE UNIQUE INDEX IF NOT EXISTS command_request ON command_receipts(conversationId,requestId);
       CREATE TABLE IF NOT EXISTS deliveries(id TEXT PRIMARY KEY, chat TEXT, text TEXT, state TEXT DEFAULT 'pending', result TEXT, parseMode TEXT);
       CREATE TABLE IF NOT EXISTS credentials(provider TEXT PRIMARY KEY, value TEXT);
       CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
       CREATE TABLE IF NOT EXISTS sessions(token TEXT PRIMARY KEY, expires INTEGER);`);
+    // Migrate old mappings once. An explicitly removed grant must stay removed
+    // after restart rather than being silently recreated from a stale mapping.
+    if (!hadGrants)
+      this.db.exec(
+        "INSERT OR IGNORE INTO telegram_grants SELECT chat,user,conversationId FROM telegram",
+      );
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS task_notifications(
+        id TEXT PRIMARY KEY,conversationId TEXT NOT NULL,requestId TEXT NOT NULL,
+        chat TEXT,user TEXT,botId TEXT,state TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS task_notification_parts(deliveryId TEXT PRIMARY KEY,notificationId TEXT NOT NULL);
+      CREATE INDEX IF NOT EXISTS task_notification_route ON task_notifications(chat,user,conversationId);
+      CREATE INDEX IF NOT EXISTS task_notification_part ON task_notification_parts(notificationId);
+    `);
+    // Revocation is terminal for already queued task parts, even if the same
+    // mapping/grant/connection is re-established before the sender next runs.
+    const cancel = (
+      condition: string,
+    ) => `UPDATE deliveries SET state='cancelled',result='Vínculo Telegram revogado antes do envio.'
+      WHERE state='pending' AND id IN (
+        SELECT p.deliveryId FROM task_notification_parts p JOIN task_notifications n ON n.id=p.notificationId WHERE ${condition}
+      );`;
+    const routeChanged = `n.chat=NEW.chat AND (n.user IS NOT NEW.user OR n.conversationId IS NOT NEW.conversationId)`;
+    const mappingChanged = `n.chat=OLD.chat AND (n.chat IS NOT NEW.chat OR n.user IS NOT NEW.user OR n.conversationId IS NOT NEW.conversationId)`;
+    const configChanged = `CASE WHEN json_valid(NEW.value) THEN
+      json_extract(NEW.value,'$.enabled') IS NOT 1
+      OR CAST(json_extract(NEW.value,'$.bot.id') AS TEXT) IS NOT n.botId
+      OR json_extract(NEW.value,'$.userId') IS NOT n.user
+      OR json_extract(NEW.value,'$.chatId') IS NOT n.chat
+      ELSE 1 END`;
+    this.db.exec(`
+      CREATE TRIGGER IF NOT EXISTS task_telegram_unlink AFTER DELETE ON telegram BEGIN ${cancel("n.chat=OLD.chat")} END;
+      CREATE TRIGGER IF NOT EXISTS task_telegram_remap AFTER UPDATE OF chat,user,conversationId ON telegram BEGIN ${cancel(mappingChanged)} END;
+      CREATE TRIGGER IF NOT EXISTS task_telegram_replace AFTER INSERT ON telegram BEGIN ${cancel(routeChanged)} END;
+      CREATE TRIGGER IF NOT EXISTS task_telegram_revoke AFTER DELETE ON telegram_grants BEGIN ${cancel("n.chat=OLD.chat AND n.user=OLD.user AND n.conversationId=OLD.conversationId")} END;
+      CREATE TRIGGER IF NOT EXISTS task_telegram_regrant AFTER UPDATE ON telegram_grants
+      WHEN OLD.chat IS NOT NEW.chat OR OLD.user IS NOT NEW.user OR OLD.conversationId IS NOT NEW.conversationId
+      BEGIN ${cancel("n.chat=OLD.chat AND n.user=OLD.user AND n.conversationId=OLD.conversationId")} END;
+      CREATE TRIGGER IF NOT EXISTS task_telegram_connection_update AFTER UPDATE OF value ON meta WHEN NEW.key='telegram:connection' BEGIN ${cancel(configChanged)} END;
+      CREATE TRIGGER IF NOT EXISTS task_telegram_connection_insert AFTER INSERT ON meta WHEN NEW.key='telegram:connection' BEGIN ${cancel(configChanged)} END;
+      CREATE TRIGGER IF NOT EXISTS task_telegram_connection_delete AFTER DELETE ON meta WHEN OLD.key='telegram:connection' BEGIN ${cancel("1")} END;
+    `);
     if (
       !this.all<{ name: string }>("PRAGMA table_info(actions)").some(
         (c) => c.name === "evidence",

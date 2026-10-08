@@ -10,8 +10,62 @@ const HEADING_TAGS = ["h1", "h2", "h3", "h4", "h5", "h6"];
 
 /** Convert Marked's token stream to DOM without parsing generated HTML. */
 export function renderMarkdown(source, doc = document) {
+  const text = String(source);
   const fragment = doc.createDocumentFragment();
-  appendBlocks(fragment, lexer(String(source)), doc);
+  // A large single token (for example base64 in JSON) can overflow the
+  // JavaScript engine's regexp stack. Never send unbounded text to Marked.
+  if (text.length > 32768) return renderTextPreview(text, doc);
+  try {
+    const tokens = lexer(text);
+    const pending = [tokens];
+    let objects = 0;
+    while (pending.length) {
+      const value = pending.pop();
+      if (!value || typeof value !== "object") continue;
+      if (++objects > 1500) return renderTextPreview(text, doc);
+      pending.push(
+        ...Object.values(value).filter(
+          (item) => item && typeof item === "object",
+        ),
+      );
+    }
+    appendBlocks(fragment, tokens, doc);
+  } catch {
+    // Malformed/deeply nested output must not interrupt the whole snapshot.
+    return renderTextPreview(text, doc);
+  }
+  return fragment;
+}
+
+export function renderTextPreview(source, doc = document) {
+  const text = String(source);
+  const fragment = doc.createDocumentFragment();
+  const pre = doc.createElement("pre");
+  pre.append(doc.createTextNode(text.slice(0, 32768)));
+  fragment.append(pre);
+  if (text.length > 32768) {
+    const notice = doc.createElement("p");
+    notice.className = "text-preview-notice";
+    notice.append(
+      doc.createTextNode(
+        "Prévia de texto extenso. O conteúdo completo permanece salvo na conversa.",
+      ),
+    );
+    const download = doc.createElement("button");
+    download.type = "button";
+    download.textContent = "Baixar texto completo";
+    download.onclick = () => {
+      const url = URL.createObjectURL(
+        new Blob([text], { type: "text/plain;charset=utf-8" }),
+      );
+      const link = doc.createElement("a");
+      link.href = url;
+      link.download = "pi-mensagem.txt";
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    };
+    fragment.append(notice, download);
+  }
   return fragment;
 }
 

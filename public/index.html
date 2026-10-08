@@ -827,7 +827,8 @@
           <use href="/icons.svg#shield-check" />
         </svg>
         <p>
-          O resultado fica na conversa. Não há envio automático ao Telegram. As
+          Todo resultado permanece na conversa web. Escolha se quer também uma
+          cópia no Telegram; a conversa precisa ter um vínculo autorizado. As
           permissões das ferramentas também se aplicam às tarefas.
         </p>
       </div>
@@ -874,6 +875,17 @@
           <div class="form-field">
             <label for="task-conversation">Conversa</label
             ><select id="task-conversation" required></select>
+          </div>
+          <div class="form-field">
+            <label for="task-delivery">Destino do resultado</label
+            ><select id="task-delivery" aria-describedby="task-delivery-hint">
+              <option value="web">Somente nesta conversa web</option>
+              <option value="web_telegram">Conversa web e Telegram</option>
+            </select>
+            <small id="task-delivery-hint" aria-live="polite"
+              >Todo resultado fica na conversa web. O Telegram recebe uma cópia
+              quando esta conversa está vinculada e autorizada.</small
+            >
           </div>
           <div class="form-grid">
             <div class="form-field">

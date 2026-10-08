@@ -1,5 +1,6 @@
 import { configureUI } from "/settings.js";
-import { renderMarkdown } from "/markdown.js";
+import { renderMarkdown, renderTextPreview } from "/markdown.js";
+import { historyWindow } from "/history.js";
 import {
   canDispatchCommandResult,
   createSlashAutocomplete,
@@ -8,6 +9,7 @@ import {
 import { attachTelegramUI } from "/telegram.js";
 import {
   attachToolVisibility,
+  attachToolBody,
   createToolCalls,
   toolResultNeedsAttention,
 } from "/tools.js";
@@ -116,6 +118,11 @@ async function api(path, method = "GET", data) {
 }
 function showLogin() {
   events?.close();
+  rendered = null;
+  lastSnapshot = null;
+  historyNodes.clear();
+  historyNavigation = null;
+  $("messages").replaceChildren();
   slashAutocomplete.close();
   clearCommandPolls();
   sidebar(false, false);
@@ -674,8 +681,12 @@ async function select(id, title) {
   else $("message").value = "";
   conversationId = id;
   settingsUI.updateConversation(null);
-  rendered = "";
+  rendered = null;
   renderedActions = "";
+  historyNodes.clear();
+  historyNavigation = null;
+  historyPage = 0;
+  lastSnapshot = null;
   $("connection").textContent = "Conectando";
   $("connection").dataset.state = "connecting";
   $("conversation-title").textContent = title;
@@ -699,67 +710,121 @@ async function select(id, title) {
     $("connection").dataset.state = "reconnecting";
   };
 }
-let rendered = "";
+let rendered = null;
 let renderedActions = "";
+let historyPage = 0;
+let lastSnapshot = null;
+// Durable transcript entries are immutable; cache only the visible page.
+const historyNodes = new Map();
+let historyNavigation = null;
 function render(snapshot) {
-  const encoded = JSON.stringify(snapshot);
-  if (encoded === rendered) return;
-  rendered = encoded;
+  if (snapshot === rendered) return;
+  rendered = snapshot;
+  lastSnapshot = snapshot;
   settingsUI.updateConversation(snapshot.settings);
   const container = document.querySelector(".conversation-body");
   const nearBottom =
     container.scrollHeight - container.scrollTop - container.clientHeight < 120;
   const messages = [];
-  for (const entry of snapshot.view.entries)
-    for (const message of entry.model || []) {
-      if (!["user", "assistant", "toolResult"].includes(message.role)) continue;
-      if (message.role === "assistant")
-        messages.push(...createToolCalls(message.content, { document, icon }));
-      const blocks =
-        typeof message.content === "string"
-          ? message.content
-          : (message.content || [])
-              .filter((c) => c.type === "text")
-              .map((c) => c.text)
-              .join("\n");
-      if (!blocks) continue;
-      const isTool = message.role === "toolResult";
-      const article = node(
-        isTool ? "details" : "article",
-        undefined,
-        `message ${message.role}`,
-      );
-      if (isTool) {
-        article.dataset.toolDetail = "";
-        if (toolResultNeedsAttention(message)) {
-          article.dataset.toolImportant = "true";
-          article.open = !!message.isError;
-        }
-      }
-      const speaker = node(isTool ? "summary" : "span", undefined, "speaker");
-      if (message.role === "assistant") speaker.append(piMark());
-      if (isTool) speaker.append(icon("plug"));
-      speaker.append(
-        node(
-          "span",
-          message.role === "user"
-            ? "Você"
-            : message.role === "assistant"
-              ? "Pi"
-              : `Ferramenta · ${message.toolName}`,
-        ),
-      );
-      const body = node("div", undefined, "message-body");
-      if (message.role === "user") body.textContent = blocks;
-      else body.append(renderMarkdown(blocks));
-      article.append(speaker, body);
-      messages.push(article);
+  const page = historyWindow(snapshot.view.entries, historyPage);
+  historyPage = page.page;
+  if (page.pages > 1) {
+    if (!historyNavigation) {
+      const navigation = node("nav", undefined, "history-navigation");
+      navigation.setAttribute("aria-label", "Histórico da conversa");
+      const older = node("button", "Ver anteriores");
+      const newer = node("button", "Ver mais recentes");
+      const label = node("span");
+      const change = (next) => {
+        historyPage = next;
+        rendered = null;
+        render(lastSnapshot);
+        container.scrollTop = 0;
+      };
+      older.onclick = () => change(historyPage + 1);
+      newer.onclick = () => change(historyPage - 1);
+      navigation.append(older, label, newer);
+      historyNavigation = { navigation, older, newer, label };
     }
+    historyNavigation.older.disabled = page.page >= page.pages - 1;
+    historyNavigation.newer.disabled = page.page === 0;
+    historyNavigation.label.textContent = `${page.page + 1} / ${page.pages}`;
+    messages.push(historyNavigation.navigation);
+  }
+  for (const key of historyNodes.keys())
+    if (!page.keys.includes(key)) historyNodes.delete(key);
+  for (const [index, message] of page.messages.entries()) {
+    const key = page.keys[index];
+    if (key && historyNodes.has(key)) {
+      messages.push(...historyNodes.get(key));
+      continue;
+    }
+    const start = messages.length;
+    if (!["user", "assistant", "toolResult"].includes(message.role)) continue;
+    if (message.role === "assistant")
+      messages.push(
+        ...createToolCalls(message.content, {
+          document,
+          icon,
+          renderText: renderTextPreview,
+        }),
+      );
+    const blocks =
+      typeof message.content === "string"
+        ? message.content
+        : (message.content || [])
+            .filter((c) => c.type === "text")
+            .map((c) => c.text)
+            .join("\n");
+    if (!blocks) {
+      if (key) historyNodes.set(key, messages.slice(start));
+      continue;
+    }
+    const isTool = message.role === "toolResult";
+    const article = node(
+      isTool ? "details" : "article",
+      undefined,
+      `message ${message.role}`,
+    );
+    if (isTool) {
+      article.dataset.toolDetail = "";
+      if (toolResultNeedsAttention(message)) {
+        article.dataset.toolImportant = "true";
+        article.open = !!message.isError;
+      }
+    }
+    const speaker = node(isTool ? "summary" : "span", undefined, "speaker");
+    if (message.role === "assistant") speaker.append(piMark());
+    if (isTool) speaker.append(icon("plug"));
+    speaker.append(
+      node(
+        "span",
+        message.role === "user"
+          ? "Você"
+          : message.role === "assistant"
+            ? "Pi"
+            : `Ferramenta · ${message.toolName}`,
+      ),
+    );
+    const body = node("div", undefined, "message-body");
+    if (isTool) attachToolBody(article, body, () => renderTextPreview(blocks));
+    else if (message.role === "user" && blocks.length <= 32768)
+      body.textContent = blocks;
+    else body.append(renderMarkdown(blocks));
+    article.append(speaker, body);
+    messages.push(article);
+    if (key) historyNodes.set(key, messages.slice(start));
+  }
   const live = snapshot.view.docs["pi.live"];
   const partial = live?.generation?.message;
-  if (partial?.content) {
+  if (partial?.content && historyPage === 0) {
     messages.push(
-      ...createToolCalls(partial.content, { document, icon, live: true }),
+      ...createToolCalls(partial.content, {
+        document,
+        icon,
+        live: true,
+        renderText: renderTextPreview,
+      }),
     );
     const partialText = partial.content
       .filter((c) => c.type === "text")
@@ -775,7 +840,8 @@ function render(snapshot) {
       messages.push(article);
     }
   }
-  const empty = messages.length === 0 && snapshot.actions.length === 0;
+  const empty =
+    page.total === 0 && !partial?.content && snapshot.actions.length === 0;
   $("welcome").hidden = !empty;
   $("suggestions").hidden = !empty;
   $("main-content").classList.toggle("is-empty", empty);
@@ -793,390 +859,405 @@ function render(snapshot) {
     uncertain: "Verificar resultado",
     reconciled: "Verificada",
   };
-  const actionConversation = conversationId;
-  const cards = snapshot.actions.map((action) => {
-    const card = node("article", undefined, "action");
-    card.dataset.state = action.state;
-    const top = node("div", undefined, "action-top");
-    const title = node("div");
-    title.append(
-      node(
-        "h3",
-        action.tool
-          .replace(/[_-]/g, " ")
-          .replace(/^./, (letter) => letter.toLocaleUpperCase("pt-BR")),
-      ),
-      node("p", action.server, "action-service"),
-    );
-    top.append(
-      icon(
-        action.state === "done"
-          ? "check-circle"
-          : action.state === "uncertain"
-            ? "warning-circle"
-            : "shield-check",
-      ),
-      title,
-      node("span", actionLabels[action.state] || action.state, "action-status"),
-    );
-    card.append(top);
-    if (action.state === "pending")
+  const actionSource = JSON.stringify([
+    snapshot.actions,
+    (snapshot.mcpInteractions || []).filter((i) => i.state === "pending"),
+    (snapshot.mcpCalls || []).filter((call) => call.state === "uncertain"),
+  ]);
+  if (actionSource !== renderedActions) {
+    const actionConversation = conversationId;
+    const cards = snapshot.actions.map((action) => {
+      const card = node("article", undefined, "action");
+      card.dataset.state = action.state;
+      const top = node("div", undefined, "action-top");
+      const title = node("div");
+      title.append(
+        node(
+          "h3",
+          action.tool
+            .replace(/[_-]/g, " ")
+            .replace(/^./, (letter) => letter.toLocaleUpperCase("pt-BR")),
+        ),
+        node("p", action.server, "action-service"),
+      );
+      top.append(
+        icon(
+          action.state === "done"
+            ? "check-circle"
+            : action.state === "uncertain"
+              ? "warning-circle"
+              : "shield-check",
+        ),
+        title,
+        node(
+          "span",
+          actionLabels[action.state] || action.state,
+          "action-status",
+        ),
+      );
+      card.append(top);
+      if (action.state === "pending")
+        card.append(
+          node(
+            "p",
+            "Revise os detalhes. Esta ação só acontece com sua confirmação.",
+            "action-note",
+          ),
+        );
+      const details = (label, value, open = false) => {
+        const section = node("details");
+        section.open = open;
+        const body = node("div", undefined, "message-body");
+        section.append(node("summary", label), body);
+        attachToolBody(section, body, () =>
+          renderTextPreview(typeof value === "function" ? value() : value),
+        );
+        return section;
+      };
       card.append(
+        details(
+          "O que será enviado",
+          () => JSON.stringify(JSON.parse(action.args), null, 2),
+          action.state === "pending",
+        ),
+        details("Contexto consultado antes da ação", () =>
+          readableResult(action.evidence),
+        ),
+        details("Identificador da ação", action.id),
+      );
+      if (action.result)
+        card.append(details("Resultado", () => readableResult(action.result)));
+      if (action.state === "pending") {
+        const buttons = node("div", undefined, "action-buttons");
+        for (const [decision, label] of [
+          ["approve", "Confirmar ação"],
+          ["deny", "Recusar"],
+        ]) {
+          const button = node(
+            "button",
+            label,
+            decision === "deny" ? "subtle" : "",
+          );
+          button.prepend(icon(decision === "approve" ? "check" : "x"));
+          button.onclick = guard(async () => {
+            button.disabled = true;
+            try {
+              await api(
+                `/api/conversations/${actionConversation}/actions/${action.id}`,
+                "POST",
+                { decision },
+              );
+              const updated = await api(
+                `/api/conversations/${actionConversation}`,
+              );
+              if (actionConversation === conversationId) render(updated);
+            } finally {
+              button.disabled = false;
+            }
+          });
+          buttons.append(button);
+        }
+        card.append(buttons);
+      } else if (action.state === "uncertain") {
+        const label = node("label", "Resultado verificado no serviço externo");
+        const input = node("textarea");
+        input.id = `note-${action.id}`;
+        label.htmlFor = input.id;
+        const button = node("button", "Registrar resultado");
+        button.onclick = guard(async () => {
+          await api(
+            `/api/conversations/${actionConversation}/actions/${action.id}`,
+            "POST",
+            { decision: "reconcile", note: input.value },
+          );
+          const updated = await api(`/api/conversations/${actionConversation}`);
+          if (actionConversation === conversationId) render(updated);
+        });
+        card.append(label, input, button);
+      }
+      return card;
+    });
+    const nativeInteractions = (snapshot.mcpInteractions || []).filter(
+      (i) => i.state === "pending",
+    );
+    for (const interaction of nativeInteractions) {
+      const interactionConversation = conversationId;
+      const payload = JSON.parse(interaction.payload);
+      const card = node("article", undefined, "action-card");
+      const heading = node("div", undefined, "action-heading");
+      heading.append(
+        icon("shield-check"),
+        node("strong", `Solicitação de ${interaction.server}`),
+      );
+      card.append(
+        heading,
         node(
           "p",
-          "Revise os detalhes. Esta ação só acontece com sua confirmação.",
+          payload.message ||
+            payload.interaction?.message ||
+            "O servidor MCP aguarda sua decisão.",
           "action-note",
         ),
       );
-    const details = (label, value, open = false) => {
-      const section = node("details");
-      section.open = open;
-      section.append(node("summary", label), node("pre", value));
-      return section;
-    };
-    card.append(
-      details(
-        "O que será enviado",
-        JSON.stringify(JSON.parse(action.args), null, 2),
-        action.state === "pending",
-      ),
-      details(
-        "Contexto consultado antes da ação",
-        readableResult(action.evidence),
-      ),
-      details("Identificador da ação", action.id),
-    );
-    if (action.result)
-      card.append(details("Resultado", readableResult(action.result)));
-    if (action.state === "pending") {
-      const buttons = node("div", undefined, "action-buttons");
-      for (const [decision, label] of [
-        ["approve", "Confirmar ação"],
-        ["deny", "Recusar"],
-      ]) {
-        const button = node(
-          "button",
-          label,
-          decision === "deny" ? "subtle" : "",
-        );
-        button.prepend(icon(decision === "approve" ? "check" : "x"));
-        button.onclick = guard(async () => {
-          button.disabled = true;
-          try {
-            await api(
-              `/api/conversations/${actionConversation}/actions/${action.id}`,
-              "POST",
-              { decision },
-            );
-            const updated = await api(
-              `/api/conversations/${actionConversation}`,
-            );
-            if (actionConversation === conversationId) render(updated);
-          } finally {
-            button.disabled = false;
-          }
-        });
-        buttons.append(button);
-      }
-      card.append(buttons);
-    } else if (action.state === "uncertain") {
-      const label = node("label", "Resultado verificado no serviço externo");
-      const input = node("textarea");
-      input.id = `note-${action.id}`;
-      label.htmlFor = input.id;
-      const button = node("button", "Registrar resultado");
-      button.onclick = guard(async () => {
-        await api(
-          `/api/conversations/${actionConversation}/actions/${action.id}`,
-          "POST",
-          { decision: "reconcile", note: input.value },
-        );
-        const updated = await api(`/api/conversations/${actionConversation}`);
-        if (actionConversation === conversationId) render(updated);
-      });
-      card.append(label, input, button);
-    }
-    return card;
-  });
-  const nativeInteractions = (snapshot.mcpInteractions || []).filter(
-    (i) => i.state === "pending",
-  );
-  for (const interaction of nativeInteractions) {
-    const interactionConversation = conversationId;
-    const payload = JSON.parse(interaction.payload);
-    const card = node("article", undefined, "action-card");
-    const heading = node("div", undefined, "action-heading");
-    heading.append(
-      icon("shield-check"),
-      node("strong", `Solicitação de ${interaction.server}`),
-    );
-    card.append(
-      heading,
-      node(
-        "p",
-        payload.message ||
-          payload.interaction?.message ||
-          "O servidor MCP aguarda sua decisão.",
-        "action-note",
-      ),
-    );
-    const detail = node("details");
-    detail.append(
-      node("summary", "Detalhes enviados pelo servidor"),
-      node("pre", JSON.stringify(payload, null, 2)),
-    );
-    card.append(detail);
-    if (interaction.kind === "url") {
-      try {
-        const url = new URL(payload.url);
-        if (url.protocol === "https:" && !url.username && !url.password) {
-          const link = node("a", "Abrir solicitação no serviço");
-          link.href = url.href;
-          link.target = "_blank";
-          link.rel = "noopener noreferrer";
-          card.append(link);
-        }
-      } catch {
-        /* display details without an unsafe link */
-      }
-    }
-    const form = node("form", undefined, "management-form");
-    const inputs = [];
-    const schema = payload.requestedSchema;
-    if (interaction.kind === "form" && schema?.properties) {
-      for (const [name, property] of Object.entries(schema.properties)) {
-        const field = node("div", undefined, "form-field");
-        const label = node("label", property.title || name);
-        let input;
-        if (Array.isArray(property.enum)) {
-          input = node("select");
-          for (const value of property.enum) {
-            const option = node("option", String(value));
-            option.value = JSON.stringify(value);
-            input.append(option);
-          }
-        } else {
-          input = node("input");
-          input.type =
-            property.type === "boolean"
-              ? "checkbox"
-              : ["number", "integer"].includes(property.type)
-                ? "number"
-                : "text";
-          if (property.type === "integer") input.step = "1";
-          if (property.default !== undefined) {
-            if (input.type === "checkbox") input.checked = property.default;
-            else
-              input.value = ["array", "object"].includes(property.type)
-                ? JSON.stringify(property.default)
-                : String(property.default);
-          }
-          if (schema.required?.includes(name) && input.type !== "checkbox")
-            input.required = true;
-        }
-        input.id = `mcp-${interaction.id}-${name}`;
-        label.htmlFor = input.id;
-        field.append(label, input);
-        if (property.description)
-          field.append(node("small", property.description));
-        form.append(field);
-        inputs.push({ name, property, input });
-      }
-    }
-    let customContent;
-    if (interaction.kind === "resume") {
-      const field = node("div", undefined, "form-field");
-      const label = node(
-        "label",
-        "Resposta ao formulário, se solicitada (JSON)",
+      const detail = node("details");
+      detail.append(
+        node("summary", "Detalhes enviados pelo servidor"),
+        node("pre", JSON.stringify(payload, null, 2)),
       );
-      customContent = node("textarea");
-      customContent.rows = 3;
-      customContent.value = "{}";
-      customContent.id = `mcp-content-${interaction.id}`;
-      label.htmlFor = customContent.id;
-      field.append(label, customContent);
-      form.append(field);
-    }
-    const error = node("p", undefined, "error");
-    error.setAttribute("role", "alert");
-    const controls = node("div", undefined, "action-buttons");
-    const accept = node("button", "Aceitar");
-    accept.type = "submit";
-    const decide = async (action) => {
-      let content;
-      if (action === "accept") {
-        if (inputs.length) {
-          content = {};
-          for (const { name, property, input } of inputs) {
-            if (input.type === "checkbox") content[name] = input.checked;
-            else if (input.value !== "")
-              content[name] = Array.isArray(property.enum)
-                ? JSON.parse(input.value)
-                : ["number", "integer"].includes(property.type)
-                  ? Number(input.value)
-                  : ["array", "object"].includes(property.type)
-                    ? JSON.parse(input.value)
-                    : input.value;
+      card.append(detail);
+      if (interaction.kind === "url") {
+        try {
+          const url = new URL(payload.url);
+          if (url.protocol === "https:" && !url.username && !url.password) {
+            const link = node("a", "Abrir solicitação no serviço");
+            link.href = url.href;
+            link.target = "_blank";
+            link.rel = "noopener noreferrer";
+            card.append(link);
           }
+        } catch {
+          /* display details without an unsafe link */
         }
-        if (customContent) content = JSON.parse(customContent.value || "{}");
       }
-      error.textContent = "";
-      controls
-        .querySelectorAll("button")
-        .forEach((button) => (button.disabled = true));
-      try {
-        await api(
-          `/api/conversations/${interactionConversation}/mcp-interactions/${interaction.id}`,
-          "POST",
-          { action, ...(content ? { content } : {}) },
+      const form = node("form", undefined, "management-form");
+      const inputs = [];
+      const schema = payload.requestedSchema;
+      if (interaction.kind === "form" && schema?.properties) {
+        for (const [name, property] of Object.entries(schema.properties)) {
+          const field = node("div", undefined, "form-field");
+          const label = node("label", property.title || name);
+          let input;
+          if (Array.isArray(property.enum)) {
+            input = node("select");
+            for (const value of property.enum) {
+              const option = node("option", String(value));
+              option.value = JSON.stringify(value);
+              input.append(option);
+            }
+          } else {
+            input = node("input");
+            input.type =
+              property.type === "boolean"
+                ? "checkbox"
+                : ["number", "integer"].includes(property.type)
+                  ? "number"
+                  : "text";
+            if (property.type === "integer") input.step = "1";
+            if (property.default !== undefined) {
+              if (input.type === "checkbox") input.checked = property.default;
+              else
+                input.value = ["array", "object"].includes(property.type)
+                  ? JSON.stringify(property.default)
+                  : String(property.default);
+            }
+            if (schema.required?.includes(name) && input.type !== "checkbox")
+              input.required = true;
+          }
+          input.id = `mcp-${interaction.id}-${name}`;
+          label.htmlFor = input.id;
+          field.append(label, input);
+          if (property.description)
+            field.append(node("small", property.description));
+          form.append(field);
+          inputs.push({ name, property, input });
+        }
+      }
+      let customContent;
+      if (interaction.kind === "resume") {
+        const field = node("div", undefined, "form-field");
+        const label = node(
+          "label",
+          "Resposta ao formulário, se solicitada (JSON)",
         );
-        const updated = await api(
-          `/api/conversations/${interactionConversation}`,
-        );
-        if (conversationId === interactionConversation) render(updated);
-      } catch (failure) {
-        error.textContent = failure.message;
-      } finally {
+        customContent = node("textarea");
+        customContent.rows = 3;
+        customContent.value = "{}";
+        customContent.id = `mcp-content-${interaction.id}`;
+        label.htmlFor = customContent.id;
+        field.append(label, customContent);
+        form.append(field);
+      }
+      const error = node("p", undefined, "error");
+      error.setAttribute("role", "alert");
+      const controls = node("div", undefined, "action-buttons");
+      const accept = node("button", "Aceitar");
+      accept.type = "submit";
+      const decide = async (action) => {
+        let content;
+        if (action === "accept") {
+          if (inputs.length) {
+            content = {};
+            for (const { name, property, input } of inputs) {
+              if (input.type === "checkbox") content[name] = input.checked;
+              else if (input.value !== "")
+                content[name] = Array.isArray(property.enum)
+                  ? JSON.parse(input.value)
+                  : ["number", "integer"].includes(property.type)
+                    ? Number(input.value)
+                    : ["array", "object"].includes(property.type)
+                      ? JSON.parse(input.value)
+                      : input.value;
+            }
+          }
+          if (customContent) content = JSON.parse(customContent.value || "{}");
+        }
+        error.textContent = "";
         controls
           .querySelectorAll("button")
-          .forEach((button) => (button.disabled = false));
-      }
-    };
-    form.onsubmit = (event) => {
-      event.preventDefault();
-      void decide("accept").catch(
-        (failure) => (error.textContent = failure.message),
-      );
-    };
-    controls.append(accept);
-    for (const [action, title] of [
-      ["decline", "Recusar"],
-      ["cancel", "Cancelar"],
-    ]) {
-      const button = node("button", title);
-      button.type = "button";
-      button.className = "subtle";
-      button.onclick = () => {
-        void decide(action).catch(
+          .forEach((button) => (button.disabled = true));
+        try {
+          await api(
+            `/api/conversations/${interactionConversation}/mcp-interactions/${interaction.id}`,
+            "POST",
+            { action, ...(content ? { content } : {}) },
+          );
+          const updated = await api(
+            `/api/conversations/${interactionConversation}`,
+          );
+          if (conversationId === interactionConversation) render(updated);
+        } catch (failure) {
+          error.textContent = failure.message;
+        } finally {
+          controls
+            .querySelectorAll("button")
+            .forEach((button) => (button.disabled = false));
+        }
+      };
+      form.onsubmit = (event) => {
+        event.preventDefault();
+        void decide("accept").catch(
           (failure) => (error.textContent = failure.message),
         );
       };
-      controls.append(button);
+      controls.append(accept);
+      for (const [action, title] of [
+        ["decline", "Recusar"],
+        ["cancel", "Cancelar"],
+      ]) {
+        const button = node("button", title);
+        button.type = "button";
+        button.className = "subtle";
+        button.onclick = () => {
+          void decide(action).catch(
+            (failure) => (error.textContent = failure.message),
+          );
+        };
+        controls.append(button);
+      }
+      form.append(error, controls);
+      card.append(form);
+      cards.push(card);
     }
-    form.append(error, controls);
-    card.append(form);
-    cards.push(card);
-  }
-  const uncertainCalls = (snapshot.mcpCalls || []).filter(
-    (call) => call.state === "uncertain",
-  );
-  const safeMcpErrors = new Set([
-    "MCP recusou a autenticação (HTTP 401). Verifique o token ou o método de login exigido pelo servidor.",
-    "MCP recusou a autenticação (HTTP 403). Verifique o token ou o método de login exigido pelo servidor.",
-    "Endpoint MCP incompatível ou não encontrado (HTTP 404). Confira o endpoint MCP completo.",
-    "Endpoint MCP incompatível ou não encontrado (HTTP 405). Confira o endpoint MCP completo.",
-    "Tempo de resposta MCP excedido. O resultado da chamada pode ser incerto.",
-    "Falha na conexão ou operação MCP. Confira endpoint, transporte e disponibilidade do servidor.",
-    "A sessão MCP expirou ou foi encerrada (HTTP 404). A chamada não foi reenviada; verifique o resultado no serviço. A próxima operação abrirá uma nova sessão.",
-    "Resultado MCP incerto. Verifique o serviço antes de tentar outra execução.",
-  ]);
-  const safeMcpErrorMessage = (result) => {
-    if (typeof result !== "string") return "";
-    try {
-      const parsed = JSON.parse(result);
-      if (parsed?.isError !== true || !Array.isArray(parsed.content)) return "";
-      const text = parsed.content
-        .filter((block) => block.type === "text")
-        .map((block) => block.text)
-        .join("\n");
-      return safeMcpErrors.has(text) ? text : "";
-    } catch {
-      return "";
-    }
-  };
-  for (const call of uncertainCalls) {
-    const callConversation = conversationId;
-    const card = node("article", undefined, "action-card");
-    card.append(
-      node("strong", `${call.server} / ${call.tool}`),
-      node(
-        "p",
-        "A chamada foi enviada, mas o efeito e o resultado não foram confirmados. Ela não será reenviada automaticamente. Verifique no serviço externo antes de registrar o resultado.",
-      ),
+    const uncertainCalls = (snapshot.mcpCalls || []).filter(
+      (call) => call.state === "uncertain",
     );
-    const safeError = safeMcpErrorMessage(call.result);
-    if (safeError) card.append(node("p", safeError, "action-note"));
-    const form = node("form", undefined, "management-form");
-    const input = node("input");
-    input.required = true;
-    input.id = `reconcile-${call.id}`;
-    const label = node("label", "Resultado verificado");
-    label.htmlFor = input.id;
-    const button = node("button", "Registrar resultado");
-    button.type = "submit";
-    const error = node("p", undefined, "error");
-    form.append(label, input, button, error);
-    form.onsubmit = (event) => {
-      event.preventDefault();
-      button.disabled = true;
-      void api(
-        `/api/conversations/${callConversation}/mcp-calls/${call.id}/reconcile`,
-        "POST",
-        { note: input.value },
-      )
-        .then(() => api(`/api/conversations/${callConversation}`))
-        .then((updated) => {
-          if (conversationId === callConversation) render(updated);
-        })
-        .catch((failure) => (error.textContent = failure.message))
-        .finally(() => (button.disabled = false));
+    const safeMcpErrors = new Set([
+      "MCP recusou a autenticação (HTTP 401). Verifique o token ou o método de login exigido pelo servidor.",
+      "MCP recusou a autenticação (HTTP 403). Verifique o token ou o método de login exigido pelo servidor.",
+      "Endpoint MCP incompatível ou não encontrado (HTTP 404). Confira o endpoint MCP completo.",
+      "Endpoint MCP incompatível ou não encontrado (HTTP 405). Confira o endpoint MCP completo.",
+      "Tempo de resposta MCP excedido. O resultado da chamada pode ser incerto.",
+      "Falha na conexão ou operação MCP. Confira endpoint, transporte e disponibilidade do servidor.",
+      "A sessão MCP expirou ou foi encerrada (HTTP 404). A chamada não foi reenviada; verifique o resultado no serviço. A próxima operação abrirá uma nova sessão.",
+      "Resultado MCP incerto. Verifique o serviço antes de tentar outra execução.",
+    ]);
+    const safeMcpErrorMessage = (result) => {
+      if (typeof result !== "string") return "";
+      try {
+        const parsed = JSON.parse(result);
+        if (parsed?.isError !== true || !Array.isArray(parsed.content))
+          return "";
+        const text = parsed.content
+          .filter((block) => block.type === "text")
+          .map((block) => block.text)
+          .join("\n");
+        return safeMcpErrors.has(text) ? text : "";
+      } catch {
+        return "";
+      }
     };
-    card.append(form);
-    cards.push(card);
-  }
-  const encodedActions = JSON.stringify([
-    snapshot.actions,
-    nativeInteractions,
-    uncertainCalls,
-  ]);
-  if (encodedActions !== renderedActions) {
-    const drafts = new Map(
-      [...$("actions").querySelectorAll("input, textarea, select")]
-        .filter((input) => input.id)
-        .map((input) => [
-          input.id,
-          {
-            value: input.value,
-            checked: input.checked,
-            start: input.selectionStart,
-            end: input.selectionEnd,
-          },
-        ]),
-    );
-    const focused = document.activeElement?.id;
-    $("actions").replaceChildren(...cards);
-    for (const [id, draft] of drafts) {
-      const input = document.getElementById(id);
-      if (!input || !$("actions").contains(input)) continue;
-      input.value = draft.value;
-      if (input.type === "checkbox") input.checked = draft.checked;
-      if (id === focused) {
-        input.focus();
-        if (
-          typeof input.setSelectionRange === "function" &&
-          draft.start !== null
-        ) {
-          try {
-            input.setSelectionRange(draft.start, draft.end);
-          } catch {
-            /* select/number fields */
+    for (const call of uncertainCalls) {
+      const callConversation = conversationId;
+      const card = node("article", undefined, "action-card");
+      card.append(
+        node("strong", `${call.server} / ${call.tool}`),
+        node(
+          "p",
+          "A chamada foi enviada, mas o efeito e o resultado não foram confirmados. Ela não será reenviada automaticamente. Verifique no serviço externo antes de registrar o resultado.",
+        ),
+      );
+      const safeError = safeMcpErrorMessage(call.result);
+      if (safeError) card.append(node("p", safeError, "action-note"));
+      const form = node("form", undefined, "management-form");
+      const input = node("input");
+      input.required = true;
+      input.id = `reconcile-${call.id}`;
+      const label = node("label", "Resultado verificado");
+      label.htmlFor = input.id;
+      const button = node("button", "Registrar resultado");
+      button.type = "submit";
+      const error = node("p", undefined, "error");
+      form.append(label, input, button, error);
+      form.onsubmit = (event) => {
+        event.preventDefault();
+        button.disabled = true;
+        void api(
+          `/api/conversations/${callConversation}/mcp-calls/${call.id}/reconcile`,
+          "POST",
+          { note: input.value },
+        )
+          .then(() => api(`/api/conversations/${callConversation}`))
+          .then((updated) => {
+            if (conversationId === callConversation) render(updated);
+          })
+          .catch((failure) => (error.textContent = failure.message))
+          .finally(() => (button.disabled = false));
+      };
+      card.append(form);
+      cards.push(card);
+    }
+    const encodedActions = JSON.stringify([
+      snapshot.actions,
+      nativeInteractions,
+      uncertainCalls,
+    ]);
+    if (encodedActions !== renderedActions) {
+      const drafts = new Map(
+        [...$("actions").querySelectorAll("input, textarea, select")]
+          .filter((input) => input.id)
+          .map((input) => [
+            input.id,
+            {
+              value: input.value,
+              checked: input.checked,
+              start: input.selectionStart,
+              end: input.selectionEnd,
+            },
+          ]),
+      );
+      const focused = document.activeElement?.id;
+      $("actions").replaceChildren(...cards);
+      for (const [id, draft] of drafts) {
+        const input = document.getElementById(id);
+        if (!input || !$("actions").contains(input)) continue;
+        input.value = draft.value;
+        if (input.type === "checkbox") input.checked = draft.checked;
+        if (id === focused) {
+          input.focus();
+          if (
+            typeof input.setSelectionRange === "function" &&
+            draft.start !== null
+          ) {
+            try {
+              input.setSelectionRange(draft.start, draft.end);
+            } catch {
+              /* select/number fields */
+            }
           }
         }
       }
+      renderedActions = encodedActions;
     }
-    renderedActions = encodedActions;
   }
   $("deliveries").replaceChildren(
     ...snapshot.deliveries

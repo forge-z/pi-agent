@@ -1,6 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
 import { CronExpressionParser } from "cron-parser";
 import type { Runtime } from "./runtime.js";
+import { queueTaskTelegram, taskTelegramAvailable } from "./task-telegram.js";
+
+export type TaskDelivery = "legacy" | "web" | "web_telegram";
 
 export class TaskError extends Error {
   constructor(message: string) {
@@ -17,6 +20,7 @@ export interface Task {
   kind: "once" | "cron";
   schedule: string;
   timezone: string;
+  delivery: TaskDelivery;
   enabled: boolean;
   nextRun: number | null;
   lastError: string | null;
@@ -108,7 +112,8 @@ export class Tasks {
       CREATE TABLE IF NOT EXISTS tasks (
         id TEXT PRIMARY KEY, title TEXT NOT NULL, prompt TEXT NOT NULL,
         conversationId TEXT NOT NULL, kind TEXT NOT NULL, schedule TEXT NOT NULL,
-        timezone TEXT NOT NULL, enabled INTEGER NOT NULL, nextRun INTEGER,
+        timezone TEXT NOT NULL, delivery TEXT NOT NULL DEFAULT 'legacy',
+        enabled INTEGER NOT NULL, nextRun INTEGER,
         lastError TEXT, deleted INTEGER NOT NULL DEFAULT 0
       );
       CREATE TABLE IF NOT EXISTS task_runs (
@@ -119,7 +124,16 @@ export class Tasks {
       CREATE UNIQUE INDEX IF NOT EXISTS task_pending ON task_runs(taskId) WHERE state='pending';
       CREATE TABLE IF NOT EXISTS task_run_keys(requestId TEXT PRIMARY KEY, runId TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS task_creations(creationKey TEXT PRIMARY KEY, taskId TEXT NOT NULL, input TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS task_delivery_changes(changeKey TEXT PRIMARY KEY,taskId TEXT NOT NULL,delivery TEXT NOT NULL,result TEXT NOT NULL);
     `);
+    if (
+      !runtime.store
+        .all<{ name: string }>("PRAGMA table_info(tasks)")
+        .some((column) => column.name === "delivery")
+    )
+      runtime.store.db.exec(
+        "ALTER TABLE tasks ADD COLUMN delivery TEXT NOT NULL DEFAULT 'legacy'",
+      );
   }
   list(): Task[] {
     return this.runtime.store
@@ -153,6 +167,7 @@ export class Tasks {
       const title = text(data.title, "Título", 120).trim();
       const prompt = text(data.prompt, "Prompt", 32000);
       const schedule = text(data.schedule, "Agenda", 200).trim();
+      const delivery = this.newDelivery(data.delivery ?? "web");
       const timezone = text(
         data.timezone === undefined ? "America/Sao_Paulo" : data.timezone,
         "Fuso",
@@ -172,7 +187,7 @@ export class Tasks {
       // The receipt and schedule commit together, before a replay-safe tool returns.
       // Resolve a receipt before checking the current time or quota: a once schedule
       // may already be in the past when its interrupted tool is resumed.
-      const signature = JSON.stringify({
+      const signatureInput: Record<string, unknown> = {
         title,
         prompt,
         kind: data.kind,
@@ -180,7 +195,11 @@ export class Tasks {
         timezone,
         enabled: data.enabled !== false,
         conversationId: data.conversationId ?? null,
-      });
+      };
+      // Keep the prior signature for interrupted tool replays that omit the
+      // newly optional field.
+      if (data.delivery !== undefined) signatureInput.delivery = delivery;
+      const signature = JSON.stringify(signatureInput);
       if (creationKey !== undefined) {
         if (!/^[\w:.-]{1,160}$/.test(creationKey))
           throw new TaskError("Chave de criação inválida");
@@ -209,12 +228,25 @@ export class Tasks {
       if (data.conversationId !== undefined) {
         conversationId = text(data.conversationId, "Conversa", 100);
         await this.runtime.conversation(conversationId);
-      } else conversationId = await this.runtime.create(title);
+      } else {
+        if (delivery === "web_telegram")
+          throw new TaskError(
+            "Telegram não está conectado e autorizado para esta conversa. Escolha uma conversa vinculada ao bot.",
+          );
+        conversationId = await this.runtime.create(title);
+      }
+      if (
+        delivery === "web_telegram" &&
+        !taskTelegramAvailable(this.runtime.store, conversationId)
+      )
+        throw new TaskError(
+          "Telegram não está conectado e autorizado para esta conversa. Conecte o bot e vincule a conversa escolhida.",
+        );
       const id = randomUUID();
       this.runtime.store.db.exec("BEGIN IMMEDIATE");
       try {
         this.runtime.store.run(
-          "INSERT INTO tasks(id,title,prompt,conversationId,kind,schedule,timezone,enabled,nextRun) VALUES (?,?,?,?,?,?,?,?,?)",
+          "INSERT INTO tasks(id,title,prompt,conversationId,kind,schedule,timezone,delivery,enabled,nextRun) VALUES (?,?,?,?,?,?,?,?,?,?)",
           id,
           title,
           prompt,
@@ -222,6 +254,7 @@ export class Tasks {
           data.kind,
           schedule,
           timezone,
+          delivery,
           data.enabled === false ? 0 : 1,
           data.enabled === false ? null : nextRun,
         );
@@ -241,29 +274,104 @@ export class Tasks {
     });
   }
   setEnabled(id: string, enabled: boolean): Task {
+    return this.update(id, { enabled });
+  }
+  setDelivery(id: string, delivery: unknown, changeKey?: string): Task {
+    if (changeKey === undefined) return this.update(id, { delivery });
     if (this.closing) throw new TaskError("Agendador encerrando");
+    if (!/^[\w:.-]{1,160}$/.test(changeKey))
+      throw new TaskError("Chave de alteração inválida");
+    const store = this.runtime.store;
+    const receipt = store.get<{
+      taskId: string;
+      delivery: string;
+      result: string;
+    }>("SELECT * FROM task_delivery_changes WHERE changeKey=?", changeKey);
+    if (receipt) {
+      if (receipt.taskId !== id || receipt.delivery !== delivery)
+        throw new TaskError(
+          "Chave de alteração já utilizada com conteúdo diferente",
+        );
+      return JSON.parse(receipt.result) as Task;
+    }
+    store.db.exec("SAVEPOINT task_delivery_change");
+    try {
+      const result = this.update(id, { delivery });
+      store.run(
+        "INSERT INTO task_delivery_changes VALUES (?,?,?,?)",
+        changeKey,
+        id,
+        result.delivery,
+        JSON.stringify(result),
+      );
+      store.db.exec("RELEASE SAVEPOINT task_delivery_change");
+      return result;
+    } catch (error) {
+      store.db.exec("ROLLBACK TO SAVEPOINT task_delivery_change");
+      store.db.exec("RELEASE SAVEPOINT task_delivery_change");
+      throw error;
+    }
+  }
+  telegramAvailability(conversationId: string) {
+    return taskTelegramAvailable(this.runtime.store, conversationId);
+  }
+  update(id: string, input: unknown): Task {
+    if (this.closing) throw new TaskError("Agendador encerrando");
+    if (!input || typeof input !== "object" || Array.isArray(input))
+      throw new TaskError("Atualização de tarefa inválida");
+    const data = input as Record<string, unknown>;
+    if (data.enabled === undefined && data.delivery === undefined)
+      throw new TaskError("Informe uma alteração da tarefa");
+    if (Object.keys(data).some((key) => !["enabled", "delivery"].includes(key)))
+      throw new TaskError("Campo de atualização inválido");
+    const task = this.require(id);
+    const enabled = data.enabled ?? task.enabled;
     if (typeof enabled !== "boolean")
       throw new TaskError("enabled deve ser booleano");
-    const task = this.require(id);
-    if (task.enabled === enabled) return task;
-    let nextRun: number | null = null;
-    if (enabled) {
-      if (task.kind === "once") {
-        const consumed = this.runtime.store.get(
-          "SELECT id FROM task_runs WHERE taskId=? AND scheduled=1",
-          id,
-        );
-        if (consumed) throw new TaskError("Tarefa única já executada");
-        nextRun = Date.parse(task.schedule);
-      } else nextRun = nextCron(task.schedule, task.timezone, this.clock());
+    const delivery =
+      data.delivery === undefined
+        ? task.delivery
+        : this.newDelivery(data.delivery, task.delivery === "legacy");
+    if (
+      data.delivery !== undefined &&
+      delivery === "web_telegram" &&
+      !taskTelegramAvailable(this.runtime.store, task.conversationId)
+    )
+      throw new TaskError(
+        "Telegram não está conectado e autorizado para esta conversa. Conecte o bot e vincule a conversa escolhida.",
+      );
+    if (task.enabled === enabled && task.delivery === delivery) return task;
+    let nextRun = task.nextRun;
+    if (enabled !== task.enabled) {
+      nextRun = null;
+      if (enabled) {
+        if (task.kind === "once") {
+          const consumed = this.runtime.store.get(
+            "SELECT id FROM task_runs WHERE taskId=? AND scheduled=1",
+            id,
+          );
+          if (consumed) throw new TaskError("Tarefa única já executada");
+          nextRun = Date.parse(task.schedule);
+        } else nextRun = nextCron(task.schedule, task.timezone, this.clock());
+      }
     }
     this.runtime.store.run(
-      "UPDATE tasks SET enabled=?,nextRun=? WHERE id=?",
+      "UPDATE tasks SET enabled=?,nextRun=?,delivery=? WHERE id=?",
       enabled ? 1 : 0,
       nextRun,
+      delivery,
       id,
     );
     return this.require(id);
+  }
+  private newDelivery(value: unknown, allowLegacy = false): TaskDelivery {
+    if (
+      value === "web" ||
+      value === "web_telegram" ||
+      (allowLegacy && value === "legacy")
+    )
+      return value;
+    throw new TaskError("Destino deve ser web ou web_telegram");
   }
   remove(id: string) {
     if (this.closing) throw new TaskError("Agendador encerrando");
@@ -457,12 +565,27 @@ export class Tasks {
           run.requestId,
         );
         // A committed input may still execute. Preserve it for idempotent recovery.
-        if (!request)
-          store.run(
-            "UPDATE task_runs SET state='failed',error=? WHERE id=?",
-            error,
-            run.id,
-          );
+        if (!request) {
+          store.db.exec("SAVEPOINT task_admission_failure");
+          try {
+            queueTaskTelegram(
+              store,
+              run.conversationId,
+              run.requestId,
+              "A tarefa não pôde iniciar. Confira sua conexão e o estado da tarefa na web.",
+            );
+            store.run(
+              "UPDATE task_runs SET state='failed',error=? WHERE id=?",
+              error,
+              run.id,
+            );
+            store.db.exec("RELEASE SAVEPOINT task_admission_failure");
+          } catch (error) {
+            store.db.exec("ROLLBACK TO SAVEPOINT task_admission_failure");
+            store.db.exec("RELEASE SAVEPOINT task_admission_failure");
+            throw error;
+          }
+        }
       }
     }
   }

@@ -136,6 +136,145 @@ test("creation receipts deduplicate concurrent calls and survive restart even af
   }
 });
 
+test("delivery tool receipts survive restart and cannot reapply an old destination or reuse a key", async () => {
+  const f = await fixture();
+  let reopened: Tasks | undefined;
+  try {
+    const task = await f.tasks.create(cron);
+    f.store.run("UPDATE tasks SET delivery='legacy' WHERE id=?", task.id);
+    const first = f.tasks.setDelivery(task.id, "web", "chat:1:delivery");
+    f.store.run("UPDATE tasks SET delivery='legacy' WHERE id=?", task.id);
+    await f.tasks.close();
+    reopened = new Tasks(f.runtime as unknown as Runtime, () => epoch);
+    assert.deepEqual(
+      reopened.setDelivery(task.id, "web", "chat:1:delivery"),
+      first,
+    );
+    assert.equal(reopened.get(task.id)?.delivery, "legacy");
+    assert.throws(
+      () => reopened!.setDelivery(task.id, "legacy", "chat:1:delivery"),
+      /conteúdo diferente/,
+    );
+    assert.throws(
+      () => reopened!.setDelivery(task.id, "web", "bad key"),
+      /Chave/,
+    );
+    f.store.db.exec(
+      "CREATE TRIGGER fail_delivery_receipt BEFORE INSERT ON task_delivery_changes BEGIN SELECT RAISE(ABORT,'mock disk failure'); END",
+    );
+    assert.throws(
+      () => reopened!.setDelivery(task.id, "web", "chat:1:failure"),
+      /mock disk failure/,
+    );
+    assert.equal(reopened.get(task.id)?.delivery, "legacy");
+    assert.equal(f.store.all("SELECT * FROM task_delivery_changes").length, 1);
+  } finally {
+    await reopened?.close();
+    await f.close();
+  }
+});
+
+test("old task rows migrate to legacy delivery and new tasks default to web", async () => {
+  const f = await fixture();
+  let migrated: Tasks | undefined;
+  try {
+    await f.tasks.close();
+    const conversationId = await f.runtime.create();
+    f.store.db.exec("DROP TABLE tasks");
+    f.store.db.exec(`CREATE TABLE tasks (
+      id TEXT PRIMARY KEY, title TEXT NOT NULL, prompt TEXT NOT NULL,
+      conversationId TEXT NOT NULL, kind TEXT NOT NULL, schedule TEXT NOT NULL,
+      timezone TEXT NOT NULL, enabled INTEGER NOT NULL, nextRun INTEGER,
+      lastError TEXT, deleted INTEGER NOT NULL DEFAULT 0
+    )`);
+    f.store.run(
+      "INSERT INTO tasks VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+      "legacy-task",
+      "Old reminder",
+      "Read the conversation",
+      conversationId,
+      "cron",
+      "* * * * *",
+      "UTC",
+      1,
+      epoch + 60000,
+      null,
+      0,
+    );
+    migrated = new Tasks(f.runtime as unknown as Runtime, () => epoch);
+    assert.equal(migrated.get("legacy-task")?.delivery, "legacy");
+    const created = await migrated.create({
+      ...cron,
+      conversationId,
+    });
+    assert.equal(created.delivery, "web");
+    assert.throws(() => migrated!.setDelivery(created.id, "legacy"), /Destino/);
+    assert.equal(
+      migrated.setDelivery("legacy-task", "legacy").delivery,
+      "legacy",
+    );
+  } finally {
+    await migrated?.close();
+    await f.close();
+  }
+});
+
+test("Telegram delivery creation and updates require the current authorized binding", async () => {
+  const f = await fixture();
+  try {
+    const conversationId = await f.runtime.create();
+    const task = await f.tasks.create({ ...cron, conversationId });
+    assert.equal(task.delivery, "web");
+    assert.equal(f.tasks.telegramAvailability(conversationId), false);
+    await assert.rejects(
+      f.tasks.create({ ...cron, conversationId, delivery: "web_telegram" }),
+      /conectado e autorizado/,
+    );
+    assert.throws(
+      () => f.tasks.setDelivery(task.id, "web_telegram"),
+      /conectado e autorizado/,
+    );
+    const binding = {
+      enabled: true,
+      bot: { id: 123456 },
+      userId: "42",
+      chatId: "42",
+      conversationId,
+    };
+    f.store.run(
+      "INSERT INTO telegram VALUES (?,?,?)",
+      "42",
+      conversationId,
+      "42",
+    );
+    f.store.run(
+      "INSERT INTO telegram_grants VALUES (?,?,?)",
+      "42",
+      "42",
+      conversationId,
+    );
+    f.store.run(
+      "INSERT INTO meta VALUES (?,?)",
+      "telegram:connection",
+      JSON.stringify(binding),
+    );
+    assert.equal(f.tasks.telegramAvailability(conversationId), true);
+    const originalNextRun = task.nextRun;
+    const telegramTask = f.tasks.setDelivery(task.id, "web_telegram");
+    assert.equal(telegramTask.delivery, "web_telegram");
+    assert.equal(telegramTask.nextRun, originalNextRun);
+    assert.equal(f.tasks.setDelivery(task.id, "web").delivery, "web");
+    f.store.run("DELETE FROM telegram_grants");
+    assert.equal(f.tasks.telegramAvailability(conversationId), false);
+    assert.throws(
+      () => f.tasks.setDelivery(task.id, "web_telegram"),
+      /conectado e autorizado/,
+    );
+  } finally {
+    await f.close();
+  }
+});
+
 test("schedule and creation receipt roll back together on a receipt storage failure", async () => {
   const f = await fixture();
   try {
@@ -416,7 +555,7 @@ test("manual client keys deduplicate after completion and when joining another p
   }
 });
 
-test("actual Runtime admits a task into the conversation with no automatic Telegram delivery", async () => {
+test("actual Runtime keeps a task result on the web when only a legacy mapping exists without an active Telegram connection", async () => {
   const dir = await temp();
   const app = await Runtime.open({ dir, gateway });
   let now = epoch;

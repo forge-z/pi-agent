@@ -36,7 +36,24 @@ export function attachToolVisibility({
   return { apply };
 }
 
-export function createToolCalls(content, { document, icon, live = false }) {
+export function attachToolBody(details, body, render) {
+  let hydrated = false;
+  details.ontoggle = () => {
+    if (details.open && !hydrated) {
+      body.append(render());
+      hydrated = true;
+    } else if (!details.open && hydrated) {
+      body.replaceChildren();
+      hydrated = false;
+    }
+  };
+  if (details.open) details.ontoggle();
+}
+
+export function createToolCalls(
+  content,
+  { document, icon, live = false, renderText },
+) {
   if (!Array.isArray(content)) return [];
   return content
     .filter((block) => block.type === "toolCall")
@@ -51,9 +68,13 @@ export function createToolCalls(content, { document, icon, live = false }) {
       summary.append(icon("plug"), label);
       const body = document.createElement("div");
       body.className = "message-body";
-      const args = document.createElement("pre");
-      args.textContent = JSON.stringify(block.arguments ?? {}, null, 2);
-      body.append(args);
+      attachToolBody(details, body, () => {
+        const text = JSON.stringify(block.arguments ?? {}, null, 2);
+        if (renderText) return renderText(text);
+        const args = document.createElement("pre");
+        args.textContent = text.slice(0, 32768);
+        return args;
+      });
       details.append(summary, body);
       return details;
     });
