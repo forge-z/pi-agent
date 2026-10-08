@@ -6,8 +6,17 @@ import {
   refreshConversationSnapshot,
 } from "/commands.js";
 import { attachTelegramUI } from "/telegram.js";
+import {
+  attachToolVisibility,
+  createToolCalls,
+  toolResultNeedsAttention,
+} from "/tools.js";
 
 const $ = (id) => document.getElementById(id);
+const toolVisibility = attachToolVisibility({
+  button: $("tool-visibility-button"),
+  messages: $("messages"),
+});
 let conversationId = null;
 let events = null;
 let providerFlow = null;
@@ -704,6 +713,8 @@ function render(snapshot) {
   for (const entry of snapshot.view.entries)
     for (const message of entry.model || []) {
       if (!["user", "assistant", "toolResult"].includes(message.role)) continue;
+      if (message.role === "assistant")
+        messages.push(...createToolCalls(message.content, { document, icon }));
       const blocks =
         typeof message.content === "string"
           ? message.content
@@ -718,6 +729,13 @@ function render(snapshot) {
         undefined,
         `message ${message.role}`,
       );
+      if (isTool) {
+        article.dataset.toolDetail = "";
+        if (toolResultNeedsAttention(message)) {
+          article.dataset.toolImportant = "true";
+          article.open = !!message.isError;
+        }
+      }
       const speaker = node(isTool ? "summary" : "span", undefined, "speaker");
       if (message.role === "assistant") speaker.append(piMark());
       if (isTool) speaker.append(icon("plug"));
@@ -740,26 +758,29 @@ function render(snapshot) {
   const live = snapshot.view.docs["pi.live"];
   const partial = live?.generation?.message;
   if (partial?.content) {
-    const article = node("article", undefined, "message assistant live");
-    const speaker = node("span", undefined, "speaker");
-    speaker.append(piMark(), node("span", "Pi está escrevendo"));
-    const body = node("div", undefined, "message-body");
-    body.append(
-      renderMarkdown(
-        partial.content
-          .filter((c) => c.type === "text")
-          .map((c) => c.text)
-          .join(""),
-      ),
+    messages.push(
+      ...createToolCalls(partial.content, { document, icon, live: true }),
     );
-    article.append(speaker, body);
-    messages.push(article);
+    const partialText = partial.content
+      .filter((c) => c.type === "text")
+      .map((c) => c.text)
+      .join("");
+    if (partialText) {
+      const article = node("article", undefined, "message assistant live");
+      const speaker = node("span", undefined, "speaker");
+      speaker.append(piMark(), node("span", "Pi está escrevendo"));
+      const body = node("div", undefined, "message-body");
+      body.append(renderMarkdown(partialText));
+      article.append(speaker, body);
+      messages.push(article);
+    }
   }
   const empty = messages.length === 0 && snapshot.actions.length === 0;
   $("welcome").hidden = !empty;
   $("suggestions").hidden = !empty;
   $("main-content").classList.toggle("is-empty", empty);
   $("messages").replaceChildren(...messages);
+  toolVisibility.apply();
   $("run-status").textContent = live?.run
     ? "Pi está trabalhando…"
     : "Conversa salva";

@@ -248,6 +248,15 @@ test("Executor pause survives restart; only an explicit human decision calls res
     assert.equal(f.counts.writes, 0);
     const pending = app.mcpCalls.interactions(id)[0];
     await assert.rejects(
+      app.mcpCalls.execute(id, 199, "mock", "execute", { code: "pause" }),
+      /pendente/,
+    );
+    assert.equal(
+      f.counts.execute,
+      1,
+      "a pending handoff must block a second browser execution",
+    );
+    await assert.rejects(
       app.mcpCalls.execute(id, 201, "mock", "resume", {
         executionId: "execution-1",
         action: "accept",

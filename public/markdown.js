@@ -149,6 +149,10 @@ function appendInline(parent, tokens, doc, fallback = "") {
       } else {
         const anchor = doc.createElement("a");
         anchor.setAttribute("href", href);
+        if (/^https?:/i.test(href)) {
+          anchor.setAttribute("target", "_blank");
+          anchor.setAttribute("rel", "noopener noreferrer");
+        }
         appendInline(anchor, token.tokens, doc, token.text ?? "");
         parent.append(anchor);
       }

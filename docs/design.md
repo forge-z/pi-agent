@@ -43,4 +43,5 @@ O tema Pi usa os tokens de cor do [CSS oficial](https://pi.dev/style.css), consu
 - Botões de ícone têm nomes acessíveis; ícones decorativos não são anunciados. Os temas usam `aria-pressed` e os diálogos são nativos.
 - O estado das ações aparece em português e por texto, além das cores. Dados da proposta, contexto lido e resultado continuam disponíveis para revisão.
 - As animações são breves e respeitam `prefers-reduced-motion`. Nenhum conteúdo de usuário é injetado como HTML.
-- Só as preferências de aparência e paleta usam localStorage; mensagens pendentes mantêm a deduplicação existente por requestId.
+- Aparência, paleta e visibilidade dos detalhes de ferramentas usam localStorage; mensagens pendentes mantêm a deduplicação existente por requestId.
+- **Ferramentas** é um botão com estado pressionado e ícone Phosphor de plugue. Ocultar detalhes preserva respostas, aprovações, erros e resultados pendentes. Links HTTP(S) das respostas preservam a aba da conversa.

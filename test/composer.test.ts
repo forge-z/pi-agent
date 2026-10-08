@@ -28,6 +28,9 @@ class Element {
   classList = { toggle() {}, contains: () => false };
   setAttribute() {}
   removeAttribute() {}
+  querySelectorAll() {
+    return [];
+  }
   addEventListener(name: string, listener: (event: KeyEvent) => void) {
     this.listeners.set(name, listener);
   }
@@ -56,9 +59,16 @@ function composer() {
     new URL("../public/app.js", import.meta.url),
     "utf8",
   );
+  const toolsSource = readFileSync(
+    new URL("../public/tools.js", import.meta.url),
+    "utf8",
+  );
   // Load the real application handlers, substituting only the browser environment.
   runInNewContext(
-    source.replace(/^import[\s\S]*?;\s*/gm, "") + '\nconversationId = "2";',
+    toolsSource.replace(/^export /gm, "") +
+      "\n" +
+      source.replace(/^import[\s\S]*?;\s*/gm, "") +
+      '\nconversationId = "2";',
     {
       document: {
         getElementById: element,
@@ -82,6 +92,10 @@ function composer() {
       sessionStorage: {
         setItem: (key: string, value: string) => storage.set(key, value),
         removeItem: (key: string) => storage.delete(key),
+      },
+      localStorage: {
+        getItem: (key: string) => storage.get(key) ?? null,
+        setItem: (key: string, value: string) => storage.set(key, value),
       },
       fetch: (path: string, options?: { body?: string }) => {
         if (path.endsWith("/messages"))
