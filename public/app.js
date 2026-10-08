@@ -121,6 +121,7 @@ function showLogin() {
   rendered = null;
   lastSnapshot = null;
   historyNodes.clear();
+  historyNavigation = null;
   $("messages").replaceChildren();
   slashAutocomplete.close();
   clearCommandPolls();
@@ -683,6 +684,7 @@ async function select(id, title) {
   rendered = null;
   renderedActions = "";
   historyNodes.clear();
+  historyNavigation = null;
   historyPage = 0;
   lastSnapshot = null;
   $("connection").textContent = "Conectando";
@@ -714,6 +716,7 @@ let historyPage = 0;
 let lastSnapshot = null;
 // Durable transcript entries are immutable; cache only the visible page.
 const historyNodes = new Map();
+let historyNavigation = null;
 function render(snapshot) {
   if (snapshot === rendered) return;
   rendered = snapshot;
@@ -726,26 +729,27 @@ function render(snapshot) {
   const page = historyWindow(snapshot.view.entries, historyPage);
   historyPage = page.page;
   if (page.pages > 1) {
-    const navigation = node("nav", undefined, "history-navigation");
-    navigation.setAttribute("aria-label", "Histórico da conversa");
-    const older = node("button", "Ver anteriores");
-    older.disabled = page.page >= page.pages - 1;
-    const newer = node("button", "Ver mais recentes");
-    newer.disabled = page.page === 0;
-    const change = (next) => {
-      historyPage = next;
-      rendered = null;
-      render(lastSnapshot);
-      container.scrollTop = 0;
-    };
-    older.onclick = () => change(page.page + 1);
-    newer.onclick = () => change(page.page - 1);
-    navigation.append(
-      older,
-      node("span", `${page.page + 1} / ${page.pages}`),
-      newer,
-    );
-    messages.push(navigation);
+    if (!historyNavigation) {
+      const navigation = node("nav", undefined, "history-navigation");
+      navigation.setAttribute("aria-label", "Histórico da conversa");
+      const older = node("button", "Ver anteriores");
+      const newer = node("button", "Ver mais recentes");
+      const label = node("span");
+      const change = (next) => {
+        historyPage = next;
+        rendered = null;
+        render(lastSnapshot);
+        container.scrollTop = 0;
+      };
+      older.onclick = () => change(historyPage + 1);
+      newer.onclick = () => change(historyPage - 1);
+      navigation.append(older, label, newer);
+      historyNavigation = { navigation, older, newer, label };
+    }
+    historyNavigation.older.disabled = page.page >= page.pages - 1;
+    historyNavigation.newer.disabled = page.page === 0;
+    historyNavigation.label.textContent = `${page.page + 1} / ${page.pages}`;
+    messages.push(historyNavigation.navigation);
   }
   for (const key of historyNodes.keys())
     if (!page.keys.includes(key)) historyNodes.delete(key);
