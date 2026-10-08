@@ -217,7 +217,11 @@ export class Runtime {
               replay: "safe",
               execute: async (args, api) => {
                 await app!.requireHumanInput(api);
-                const task = app!.tasks.setDelivery(args.taskId, args.delivery);
+                const task = app!.tasks.setDelivery(
+                  args.taskId,
+                  args.delivery,
+                  `chat:${api.conversationId}:${api.taskId}`,
+                );
                 return {
                   content: [{ type: "text", text: JSON.stringify(task) }],
                 };

@@ -42,7 +42,10 @@ test("model receives task tools and creates/lists the same durable schedule used
       );
       assert.ok(names.includes("tasks_list"));
       assert.ok(names.includes("tasks_set_delivery"));
-      assert.match(JSON.stringify(getCurrentTools(transcript.messages)), /web_telegram/);
+      assert.match(
+        JSON.stringify(getCurrentTools(transcript.messages)),
+        /web_telegram/,
+      );
       return fauxAssistantMessage(
         {
           type: "toolCall",
@@ -100,7 +103,11 @@ test("model receives task tools and creates/lists the same durable schedule used
       names.includes("tasks_create"),
       "internal task tools must be available without MCP configuration",
     );
-    await app.submit(id, "daily", "Crie um resumo diário às 8h em Brasília e entregue no Telegram");
+    await app.submit(
+      id,
+      "daily",
+      "Crie um resumo diário às 8h em Brasília e entregue no Telegram",
+    );
     await (await app.conversation(id)).waitForIdle(context);
     const tasks = new Tasks(app);
     let task = tasks.list()[0]!;
@@ -123,9 +130,17 @@ test("model receives task tools and creates/lists the same durable schedule used
       "tool results must contain the persisted task ID",
     );
     taskId = task.id;
-    await app.submit(id, "change-delivery", "Change that task so it only stays in the web conversation");
+    await app.submit(
+      id,
+      "change-delivery",
+      "Change that task so it only stays in the web conversation",
+    );
     await (await app.conversation(id)).waitForIdle(context);
     assert.equal(app.tasks.list()[0]?.delivery, "web");
+    assert.equal(
+      app.store.all("SELECT * FROM task_delivery_changes").length,
+      1,
+    );
     task = tasks.list()[0]!;
     await tasks.close();
     await app.close();

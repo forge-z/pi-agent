@@ -136,6 +136,44 @@ test("creation receipts deduplicate concurrent calls and survive restart even af
   }
 });
 
+test("delivery tool receipts survive restart and cannot reapply an old destination or reuse a key", async () => {
+  const f = await fixture();
+  let reopened: Tasks | undefined;
+  try {
+    const task = await f.tasks.create(cron);
+    f.store.run("UPDATE tasks SET delivery='legacy' WHERE id=?", task.id);
+    const first = f.tasks.setDelivery(task.id, "web", "chat:1:delivery");
+    f.store.run("UPDATE tasks SET delivery='legacy' WHERE id=?", task.id);
+    await f.tasks.close();
+    reopened = new Tasks(f.runtime as unknown as Runtime, () => epoch);
+    assert.deepEqual(
+      reopened.setDelivery(task.id, "web", "chat:1:delivery"),
+      first,
+    );
+    assert.equal(reopened.get(task.id)?.delivery, "legacy");
+    assert.throws(
+      () => reopened!.setDelivery(task.id, "legacy", "chat:1:delivery"),
+      /conteúdo diferente/,
+    );
+    assert.throws(
+      () => reopened!.setDelivery(task.id, "web", "bad key"),
+      /Chave/,
+    );
+    f.store.db.exec(
+      "CREATE TRIGGER fail_delivery_receipt BEFORE INSERT ON task_delivery_changes BEGIN SELECT RAISE(ABORT,'mock disk failure'); END",
+    );
+    assert.throws(
+      () => reopened!.setDelivery(task.id, "web", "chat:1:failure"),
+      /mock disk failure/,
+    );
+    assert.equal(reopened.get(task.id)?.delivery, "legacy");
+    assert.equal(f.store.all("SELECT * FROM task_delivery_changes").length, 1);
+  } finally {
+    await reopened?.close();
+    await f.close();
+  }
+});
+
 test("old task rows migrate to legacy delivery and new tasks default to web", async () => {
   const f = await fixture();
   let migrated: Tasks | undefined;
@@ -170,6 +208,11 @@ test("old task rows migrate to legacy delivery and new tasks default to web", as
       conversationId,
     });
     assert.equal(created.delivery, "web");
+    assert.throws(() => migrated!.setDelivery(created.id, "legacy"), /Destino/);
+    assert.equal(
+      migrated.setDelivery("legacy-task", "legacy").delivery,
+      "legacy",
+    );
   } finally {
     await migrated?.close();
     await f.close();
@@ -198,7 +241,12 @@ test("Telegram delivery creation and updates require the current authorized bind
       chatId: "42",
       conversationId,
     };
-    f.store.run("INSERT INTO telegram VALUES (?,?,?)", "42", conversationId, "42");
+    f.store.run(
+      "INSERT INTO telegram VALUES (?,?,?)",
+      "42",
+      conversationId,
+      "42",
+    );
     f.store.run(
       "INSERT INTO telegram_grants VALUES (?,?,?)",
       "42",

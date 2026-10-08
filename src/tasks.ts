@@ -1,10 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { CronExpressionParser } from "cron-parser";
 import type { Runtime } from "./runtime.js";
-import {
-  queueTaskTelegram,
-  taskTelegramAvailable,
-} from "./task-telegram.js";
+import { queueTaskTelegram, taskTelegramAvailable } from "./task-telegram.js";
 
 export type TaskDelivery = "legacy" | "web" | "web_telegram";
 
@@ -127,6 +124,7 @@ export class Tasks {
       CREATE UNIQUE INDEX IF NOT EXISTS task_pending ON task_runs(taskId) WHERE state='pending';
       CREATE TABLE IF NOT EXISTS task_run_keys(requestId TEXT PRIMARY KEY, runId TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS task_creations(creationKey TEXT PRIMARY KEY, taskId TEXT NOT NULL, input TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS task_delivery_changes(changeKey TEXT PRIMARY KEY,taskId TEXT NOT NULL,delivery TEXT NOT NULL,result TEXT NOT NULL);
     `);
     if (
       !runtime.store
@@ -278,8 +276,41 @@ export class Tasks {
   setEnabled(id: string, enabled: boolean): Task {
     return this.update(id, { enabled });
   }
-  setDelivery(id: string, delivery: unknown): Task {
-    return this.update(id, { delivery });
+  setDelivery(id: string, delivery: unknown, changeKey?: string): Task {
+    if (changeKey === undefined) return this.update(id, { delivery });
+    if (this.closing) throw new TaskError("Agendador encerrando");
+    if (!/^[\w:.-]{1,160}$/.test(changeKey))
+      throw new TaskError("Chave de alteração inválida");
+    const store = this.runtime.store;
+    const receipt = store.get<{
+      taskId: string;
+      delivery: string;
+      result: string;
+    }>("SELECT * FROM task_delivery_changes WHERE changeKey=?", changeKey);
+    if (receipt) {
+      if (receipt.taskId !== id || receipt.delivery !== delivery)
+        throw new TaskError(
+          "Chave de alteração já utilizada com conteúdo diferente",
+        );
+      return JSON.parse(receipt.result) as Task;
+    }
+    store.db.exec("SAVEPOINT task_delivery_change");
+    try {
+      const result = this.update(id, { delivery });
+      store.run(
+        "INSERT INTO task_delivery_changes VALUES (?,?,?,?)",
+        changeKey,
+        id,
+        result.delivery,
+        JSON.stringify(result),
+      );
+      store.db.exec("RELEASE SAVEPOINT task_delivery_change");
+      return result;
+    } catch (error) {
+      store.db.exec("ROLLBACK TO SAVEPOINT task_delivery_change");
+      store.db.exec("RELEASE SAVEPOINT task_delivery_change");
+      throw error;
+    }
   }
   telegramAvailability(conversationId: string) {
     return taskTelegramAvailable(this.runtime.store, conversationId);
@@ -300,7 +331,7 @@ export class Tasks {
     const delivery =
       data.delivery === undefined
         ? task.delivery
-        : this.newDelivery(data.delivery, true);
+        : this.newDelivery(data.delivery, task.delivery === "legacy");
     if (
       data.delivery !== undefined &&
       delivery === "web_telegram" &&

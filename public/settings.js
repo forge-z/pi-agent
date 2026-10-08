@@ -693,7 +693,10 @@ export function configureUI(api, callbacks) {
     );
     return result.available === true;
   }
+  const deliveryHintRequests = new WeakMap();
   async function updateTaskDeliveryHint(select, conversationId, hint) {
+    const request = {};
+    deliveryHintRequests.set(select, request);
     const selected = select.value;
     if (selected === "web") {
       hint.textContent =
@@ -713,13 +716,20 @@ export function configureUI(api, callbacks) {
     hint.textContent = "Verificando o vínculo desta conversa…";
     try {
       const available = await telegramAvailable(conversationId);
-      if (select.value !== selected) return false;
+      if (
+        select.value !== selected ||
+        deliveryHintRequests.get(select) !== request
+      )
+        return false;
       hint.textContent = available
         ? "O resultado também será enviado ao Telegram desta conversa enquanto o vínculo autorizado permanecer ativo."
         : "Telegram não está conectado e autorizado para esta conversa. Conecte o bot e vincule a conversa escolhida; o resultado continuará disponível na web.";
       return available;
     } catch {
-      if (select.value === selected)
+      if (
+        select.value === selected &&
+        deliveryHintRequests.get(select) === request
+      )
         hint.textContent =
           "Não foi possível verificar o vínculo agora. A seleção será validada ao salvar; o resultado permanece na conversa web.";
       return false;
@@ -797,11 +807,13 @@ export function configureUI(api, callbacks) {
           "card-meta",
         ),
       );
-      const deliveryLabel = {
-        legacy: "Telegram quando houver vínculo autorizado (comportamento atual)",
-        web: "Somente nesta conversa web",
-        web_telegram: "Conversa web e Telegram",
-      }[task.delivery] || "Destino desconhecido";
+      const deliveryLabel =
+        {
+          legacy:
+            "Telegram quando houver vínculo autorizado (comportamento atual)",
+          web: "Somente nesta conversa web",
+          web_telegram: "Conversa web e Telegram",
+        }[task.delivery] || "Destino desconhecido";
       card.append(node("p", `Destino: ${deliveryLabel}`, "card-meta"));
       card.append(
         node(
@@ -813,7 +825,11 @@ export function configureUI(api, callbacks) {
       if (task.lastError) card.append(node("p", task.lastError, "error"));
       const actions = node("div", undefined, "card-buttons");
       const editorId = `task-delivery-${task.id}`;
-      const editor = node("form", undefined, "management-form task-delivery-editor");
+      const editor = node(
+        "form",
+        undefined,
+        "management-form task-delivery-editor",
+      );
       editor.hidden = true;
       const field = node("div", undefined, "form-field");
       const label = node("label", "Destino do resultado");
@@ -823,7 +839,14 @@ export function configureUI(api, callbacks) {
       editorSelect.replaceChildren(
         option("web", "Somente nesta conversa web"),
         option("web_telegram", "Conversa web e Telegram"),
-        option("legacy", "Telegram quando houver vínculo (comportamento atual)"),
+        ...(task.delivery === "legacy"
+          ? [
+              option(
+                "legacy",
+                "Telegram quando houver vínculo (comportamento atual)",
+              ),
+            ]
+          : []),
       );
       editorSelect.value = task.delivery;
       const editorHint = node("small");
@@ -843,7 +866,11 @@ export function configureUI(api, callbacks) {
       editorActions.append(saveDelivery, cancelDelivery);
       editor.append(field, editorError, editorActions);
       editorSelect.onchange = () =>
-        void updateTaskDeliveryHint(editorSelect, task.conversationId, editorHint);
+        void updateTaskDeliveryHint(
+          editorSelect,
+          task.conversationId,
+          editorHint,
+        );
       editor.onsubmit = (event) => {
         event.preventDefault();
         void act(editorError.id, [saveDelivery], async () => {
@@ -865,7 +892,11 @@ export function configureUI(api, callbacks) {
         editor.hidden = !editor.hidden;
         if (editor.hidden) return;
         editorSelect.value = task.delivery;
-        void updateTaskDeliveryHint(editorSelect, task.conversationId, editorHint);
+        void updateTaskDeliveryHint(
+          editorSelect,
+          task.conversationId,
+          editorHint,
+        );
       });
       const pause = button(task.enabled ? "Pausar" : "Retomar", () => {
         void act("tasks-error", [pause], async () => {
@@ -1018,6 +1049,11 @@ export function configureUI(api, callbacks) {
       $("task-once").value = "";
       $("task-cron").value = "";
       $("task-delivery").value = "web";
+      await updateTaskDeliveryHint(
+        $("task-delivery"),
+        $("task-conversation").value,
+        $("task-delivery-hint"),
+      );
       await loadTasks();
       feedback(
         "tasks-feedback",
