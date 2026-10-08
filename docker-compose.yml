@@ -18,11 +18,10 @@ services:
       # Senha de runtime: o build não precisa dela. A aplicação recusa senha vazia/curta.
       WEB_PASSWORD: ${WEB_PASSWORD:-}
       MCP_CONFIG_FILE: ${MCP_CONFIG_FILE:-}
+      # Somente para migração explícita via botão Telegram no cabeçalho da conversa; nunca conecta no startup.
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
-      TELEGRAM_BOT_USERNAME: ${TELEGRAM_BOT_USERNAME:-}
-      TELEGRAM_WEBHOOK_SECRET: ${TELEGRAM_WEBHOOK_SECRET:-}
-      TELEGRAM_ALLOWED_USERS: ${TELEGRAM_ALLOWED_USERS:-}
-      TELEGRAM_ALLOWED_CHATS: ${TELEGRAM_ALLOWED_CHATS:-}
+      TELEGRAM_BOT_TOKEN_FILE: ${TELEGRAM_BOT_TOKEN_FILE:-}
+      # Variáveis antigas de webhook/allowlist não configuram a UI de polling.
     volumes:
       - pi_agent_data:/app/data
       # Se usar MCP, monte uma configuração revisada e somente leitura:

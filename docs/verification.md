@@ -1,5 +1,21 @@
 # Verificação local do MVP
 
+## Polling privado Telegram e recuperação de sessão MCP
+
+Em 8 de outubro de 2026, na branch local `feat/telegram-private-polling`, baseada em `7ec5878`: **131 testes passaram**, zero falhas, cancelamentos ou skips, em 33,77 segundos. Tipos, lint, build, sintaxe dos scripts, YAML do Compose e `git diff --check` também passaram. A execução usou Node 26.0.0. O Dockerfile mantém Node 24; Docker não está disponível nesta máquina, portanto o container desta revisão não foi reconstruído.
+
+Os testes Telegram cobrem conexão autenticada, origem exata, usuário privado explícito, conversa compartilhada, deduplicação e offset depois de reiniciar, rollback de vínculo/grant, falhas de armazenamento com backoff, 429/409/token inválido, rotação de token do mesmo bot e bloqueio de outro bot. Aprovações canceladas e envios incertos não são repetidos. Trocar um webhook exige bot e versão da URL correspondentes; decisões duplicadas ou um resultado de remoção incerto não reaplicam o efeito. A configuração antiga não conecta automaticamente; até um arquivo de token legado inexistente deixa o serviço web iniciar. O token persiste no SQLite privado e não aparece no status nem no catálogo de credenciais do Pi.
+
+Os 16 novos testes de sessão MCP reproduzem 404 de sessão expirada com o SDK real contra HTTP mock, descoberta concorrente e paginada, reinicialização limitada, cancelamento e falha antes do envio. Somente leituras explicitamente classificadas podem repetir uma chamada uma vez; direct/actions enviados permanecem incertos e não são repetidos. Três testes da UI verificam que **Registrar resultado** aparece apenas no estado incerto e não expõe erros desconhecidos ou argumentos. Os oito testes do novo diálogo Telegram cobrem token vazio após salvar/fechar, seleção da conversa, orientação da primeira mensagem, troca explícita e retries idempotentes.
+
+Na prévia local com bot inteiramente simulado, o navegador integrado verificou conexão, confirmação da troca de webhook e destino da conversa. Desktop escuro 1280×900 e celular claro 390×844 foram inspecionados; 375×812 e paisagem 812×375 mantiveram a largura sem overflow horizontal e rolagem do diálogo. Não houve erro do código da aplicação capturado no console; houve erros de uma extensão de autofill do navegador, sem alterar os resultados do fluxo. O link `t.me` não foi aberto. As capturas usam apenas IDs, nomes e senha descartáveis de uma base temporária.
+
+![Telegram conectado no desktop com bot simulado](evidence/telegram-polling/connected-desktop.jpg)
+
+![Telegram conectado no celular com bot simulado](evidence/telegram-polling/connected-mobile.jpg)
+
+O anexo `image(6).png` não foi inspecionado em pixels: o download pela Library retornou 403; somente o texto extraído ficou disponível. A correção MCP foi sustentada pela reprodução e pelos testes locais. Telegram, ChatGPT e Executor reais não foram conectados neste lote. Nenhum envio real, alteração no Coolify ou deploy foi realizado.
+
 ## MCP direto: verificação mais recente
 
 Em 7 de outubro de 2026, Node.js 26.0.0, a suíte completa passou com **49 testes**, sem falhas ou skips. Tipos, lint, build, sintaxe dos scripts web e `git diff --check` passaram.

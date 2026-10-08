@@ -392,13 +392,14 @@
               >Conectando</span
             ><span class="header-divider" aria-hidden="true"></span
             ><button
-              id="link-button"
+              id="telegram-button"
               class="subtle"
-              aria-label="Vincular Telegram"
+              aria-label="Configurar Telegram"
+              type="button"
             >
               <svg class="icon" aria-hidden="true">
                 <use href="/icons.svg#telegram-logo" /></svg
-              ><span>Vincular Telegram</span>
+              ><span>Telegram</span>
             </button>
           </div>
         </header>
@@ -958,9 +959,17 @@
         aria-live="polite"
       ></div>
     </dialog>
-    <dialog id="link-dialog" aria-labelledby="link-title">
+    <dialog
+      id="telegram-dialog"
+      class="telegram-dialog"
+      aria-labelledby="telegram-title"
+    >
       <form method="dialog">
-        <button class="dialog-close icon-button" aria-label="Fechar">
+        <button
+          class="dialog-close icon-button"
+          aria-label="Fechar"
+          type="submit"
+        >
           <svg class="icon" aria-hidden="true"><use href="/icons.svg#x" /></svg>
         </button>
       </form>
@@ -968,27 +977,140 @@
         ><svg class="icon" aria-hidden="true">
           <use href="/icons.svg#telegram-logo" /></svg
       ></span>
-      <p class="eyebrow">A CONVERSA VAI COM VOCÊ</p>
-      <h2 id="link-title">Continue no Telegram.</h2>
-      <p>
-        Abra o seu bot no aplicativo Telegram e envie o comando abaixo, usando
-        um usuário e chat autorizados. Não cole este comando no chat web do Pi.
-        O histórico continua o mesmo.
+      <p class="eyebrow">CONEXÃO DIRETA</p>
+      <h2 id="telegram-title">Telegram</h2>
+      <p class="telegram-intro">
+        Configure o bot e escolha o usuário autorizado. A conversa selecionada
+        será o destino das mensagens recebidas.
       </p>
-      <code id="link-code"></code
-      ><button id="copy-link">
-        <svg class="icon" aria-hidden="true"><use href="/icons.svg#copy" /></svg
-        ><span>Copiar comando</span>
-      </button>
-      <a
-        id="open-telegram"
-        class="subtle"
+
+      <section class="telegram-overview" aria-label="Estado da conexão">
+        <div class="telegram-status-line">
+          <span
+            id="telegram-state"
+            class="telegram-state"
+            data-state="unconfigured"
+            >Verificando</span
+          >
+          <span id="telegram-bot" class="fine">Bot não identificado</span>
+        </div>
+        <p
+          id="telegram-status-message"
+          class="telegram-status-message"
+          role="status"
+          aria-live="polite"
+        ></p>
+        <p id="telegram-last-success" class="fine telegram-last-success"></p>
+        <p
+          id="telegram-first-message"
+          class="telegram-first-message"
+          role="status"
+          hidden
+        ></p>
+        <div id="telegram-linked" class="telegram-linked" hidden>
+          <span class="fine">Destino configurado</span>
+          <strong id="telegram-linked-title"></strong>
+          <code id="telegram-linked-id"></code>
+        </div>
+        <div class="telegram-target">
+          <span class="fine">Destino desta conexão</span>
+          <strong id="telegram-target-title">Conversa atual</strong>
+          <code id="telegram-target-id"></code>
+        </div>
+      </section>
+
+      <form id="telegram-form" class="telegram-form">
+        <div class="telegram-field">
+          <label for="telegram-token">Token do bot</label>
+          <input
+            id="telegram-token"
+            type="password"
+            inputmode="text"
+            autocomplete="new-password"
+            autocapitalize="off"
+            spellcheck="false"
+            placeholder="Cole o token do bot"
+            aria-describedby="telegram-token-hint"
+            required
+          />
+          <p id="telegram-token-hint" class="fine">
+            O token salvo nunca é exibido. Se já houver um token configurado,
+            deixe este campo em branco para mantê-lo.
+          </p>
+        </div>
+        <div class="telegram-field">
+          <label for="telegram-user-id"
+            >ID numérico do usuário autorizado</label
+          >
+          <input
+            id="telegram-user-id"
+            type="text"
+            inputmode="numeric"
+            autocomplete="off"
+            autocapitalize="off"
+            spellcheck="false"
+            pattern="[0-9]+"
+            placeholder="Ex.: 123456789"
+            aria-describedby="telegram-user-hint"
+            required
+          />
+          <p id="telegram-user-hint" class="fine">
+            Aceita apenas os dígitos do seu ID do Telegram.
+          </p>
+        </div>
+        <p
+          id="telegram-form-error"
+          class="error telegram-form-error"
+          role="alert"
+        ></p>
+        <div class="telegram-actions">
+          <button id="telegram-connect" type="submit">Conectar</button>
+          <button id="telegram-disconnect" type="button" class="subtle" hidden>
+            Desconectar
+          </button>
+          <a
+            id="telegram-open-bot"
+            class="subtle telegram-open-bot"
+            hidden
+            target="_blank"
+            rel="noopener noreferrer"
+            >Abrir bot no Telegram</a
+          >
+        </div>
+        <div id="telegram-retry-actions" class="telegram-retry-actions" hidden>
+          <button id="telegram-retry" type="button">Tentar novamente</button>
+          <button id="telegram-refresh" type="button" class="subtle">
+            Atualizar status
+          </button>
+        </div>
+      </form>
+
+      <section
+        id="telegram-conflict"
+        class="telegram-conflict"
+        aria-labelledby="telegram-conflict-title"
         hidden
-        target="_blank"
-        rel="noopener noreferrer"
-        >Abrir bot no Telegram</a
       >
-      <p class="fine">Código de uso único, válido por 10 minutos.</p>
+        <p class="eyebrow">WEBHOOK JÁ CONFIGURADO</p>
+        <h3 id="telegram-conflict-title">
+          O bot está recebendo atualizações em outro endereço.
+        </h3>
+        <p id="telegram-conflict-bot" class="telegram-conflict-bot"></p>
+        <p class="fine">Endereço atual do webhook</p>
+        <code id="telegram-webhook-url" class="telegram-webhook-url"></code>
+        <p>
+          Trocar para polling remove esse webhook do Telegram. Essa alteração só
+          acontece quando você confirmar abaixo.
+        </p>
+        <div class="telegram-conflict-actions">
+          <button id="telegram-replace-webhook" type="button">
+            Trocar para polling
+          </button>
+          <button id="telegram-cancel-conflict" type="button" class="subtle">
+            Cancelar
+          </button>
+        </div>
+      </section>
     </dialog>
     <dialog id="provider-dialog" aria-labelledby="provider-title">
       <span class="dialog-icon"

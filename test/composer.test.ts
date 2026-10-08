@@ -68,6 +68,7 @@ function composer() {
       window: { matchMedia: () => ({ matches: false, addEventListener() {} }) },
       navigator: {},
       configureUI: () => ({ reset() {} }),
+      attachTelegramUI: () => ({ reset() {} }),
       canDispatchCommandResult: () => true,
       createSlashAutocomplete: () => ({
         close() {},

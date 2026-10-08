@@ -14,6 +14,7 @@ export interface TelegramUpdate {
 export interface TelegramTransport {
   send(chat: string, text: string): Promise<unknown>;
 }
+export class TelegramInputError extends Error {}
 export class TelegramHttp implements TelegramTransport {
   constructor(private token: string) {}
   async send(chat: string, text: string) {
@@ -42,6 +43,7 @@ export class Telegram {
     private users: string[],
     private chats: string[],
     readonly botUsername?: string,
+    private privateDm = false,
   ) {
     this.botUsername = botUsername?.trim().replace(/^@/, "") || undefined;
     if (this.botUsername && !/^[a-zA-Z0-9_]{5,32}$/.test(this.botUsername))
@@ -58,18 +60,24 @@ export class Telegram {
       return undefined;
     return text.replace(/^(\/[a-z]+)@[a-z0-9_]+/i, "$1");
   }
-  async receive(update: TelegramUpdate) {
+  async receive(update: TelegramUpdate, signal?: AbortSignal) {
     const message = update.message;
     if (
       !Number.isSafeInteger(update.update_id) ||
       !message?.from ||
       message.from.is_bot ||
-      !message.text
+      typeof message.text !== "string" ||
+      !message.text ||
+      !message.chat
     )
       return { ignored: true };
     const user = String(message.from.id),
       chat = String(message.chat.id);
-    if (!this.users.includes(user) || !this.chats.includes(chat))
+    if (
+      !this.users.includes(user) ||
+      !this.chats.includes(chat) ||
+      (this.privateDm && message.chat.type !== "private")
+    )
       return { ignored: true };
     const text = this.commandText(message.text);
     if (text === undefined) return { ignored: true };
@@ -79,7 +87,9 @@ export class Telegram {
       update.update_id,
     );
     if (previous && previous.fingerprint !== fingerprint)
-      throw new Error("update_id já utilizado com conteúdo diferente");
+      throw new TelegramInputError(
+        "update_id já utilizado com conteúdo diferente",
+      );
     const linked = this.app.store.get<{ conversationId: string; user: string }>(
       "SELECT * FROM telegram WHERE chat=?",
       chat,
@@ -88,12 +98,19 @@ export class Telegram {
       !/^\/(link|start)(?:\s|$)/.test(text) &&
       (!linked || linked.user !== user)
     )
-      throw new Error(
+      throw new TelegramInputError(
         "Conversa não vinculada a este usuário; use /link CODIGO pela web",
       );
     const inFlight = this.receives.get(update.update_id);
     if (inFlight) return inFlight;
-    const operation = this.accept(update, user, chat, fingerprint, text);
+    const operation = this.accept(
+      update,
+      user,
+      chat,
+      fingerprint,
+      text,
+      signal,
+    );
     this.receives.set(update.update_id, operation);
     void operation
       .finally(() => this.receives.delete(update.update_id))
@@ -106,6 +123,7 @@ export class Telegram {
     chat: string,
     fingerprint: string,
     text: string,
+    signal?: AbortSignal,
   ) {
     // Re-delivered commands reuse the update key; never consume a link or approve twice.
     const commandKey = `telegram:update:${update.update_id}`;
@@ -147,7 +165,9 @@ export class Telegram {
     if (pairing?.[1] === "start" && !pairing[2]) {
       errorReply =
         linked?.user === user
-          ? "Conversa vinculada. Use /help para consultar os comandos. Para vincular outra conversa, gere um código na interface web."
+          ? this.privateDm
+            ? "Conectado. O histórico é compartilhado com a web. Use /help para consultar os comandos."
+            : "Conversa vinculada. Use /help para consultar os comandos. Para vincular outra conversa, gere um código na interface web."
           : "Abra a conversa na interface web, escolha Vincular Telegram e envie /link CODIGO aqui. O código é de uso único e expira em 10 minutos.";
       response = { info: errorReply };
     } else if (pairing) {
@@ -155,25 +175,44 @@ export class Telegram {
         throw new CommandError(
           "Uso: /link CODIGO ou /start CODIGO, com o código gerado na interface web.",
         );
-      const conversationId = this.app.store.consumeLink(
-        pairing[2],
-        chat,
-        user,
-        commandKey,
-      );
+      let conversationId: string;
+      try {
+        conversationId = this.app.store.consumeLink(
+          pairing[2],
+          chat,
+          user,
+          commandKey,
+        );
+      } catch (error) {
+        if (
+          error instanceof Error &&
+          error.message === "Código de vínculo inválido ou expirado"
+        )
+          throw new TelegramInputError(error.message);
+        throw error;
+      }
       response = { linked: conversationId };
       // Re-link command is durably marked in the same synchronous turn as code consumption.
     } else {
       if (!linked || linked.user !== user)
-        throw new Error(
+        throw new TelegramInputError(
           "Vincule esta conversa na interface web com /link CODIGO",
         );
       const decision = /^\/(approve|deny)\s+([a-f0-9]{24})$/.exec(text);
       if (decision) {
+        if (
+          !this.app.store.get(
+            "SELECT id FROM actions WHERE id=? AND conversationId=?",
+            decision[2],
+            linked.conversationId,
+          )
+        )
+          throw new TelegramInputError("Ação não encontrada nesta conversa");
         const action = await this.app.actions.decide(
           linked.conversationId,
           decision[2],
           decision[1] === "approve" ? "approve" : "deny",
+          signal,
         );
         if (action.state === "running") return { processing: true };
         await this.app.recordAction(action);
@@ -235,13 +274,18 @@ export class Telegram {
   }
   async drain() {
     this.closing = true;
+    await Promise.allSettled(this.receives.values());
     await this.flushWork;
+  }
+  setDmChat(chat: string) {
+    if (this.privateDm) this.chats = [chat];
   }
   private async sendPending() {
     for (const delivery of this.app.store.all<Delivery>(
       "SELECT * FROM deliveries WHERE state='pending' ORDER BY rowid",
     )) {
       if (this.closing) break;
+      if (this.privateDm && !this.chats.includes(delivery.chat)) continue;
       const changed = this.app.store.run(
         "UPDATE deliveries SET state='sending' WHERE id=? AND state='pending'",
         delivery.id,

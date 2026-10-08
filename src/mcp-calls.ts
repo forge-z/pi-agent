@@ -5,7 +5,7 @@ import type {
   CallToolResult,
 } from "@modelcontextprotocol/sdk/types.js";
 import { AjvJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/ajv";
-import { McpGateway, PolicyError } from "./mcp.js";
+import { McpGateway, McpError, McpNotSentError, PolicyError } from "./mcp.js";
 import type { Store } from "./store.js";
 
 export interface McpCall {
@@ -221,7 +221,7 @@ export class McpCalls {
           {
             type: "text",
             text:
-              error instanceof PolicyError
+              error instanceof PolicyError || error instanceof McpError
                 ? error.message
                 : "Resultado MCP incerto. Verifique o serviço antes de tentar outra execução.",
           },
@@ -229,7 +229,9 @@ export class McpCalls {
       };
       this.store.run(
         "UPDATE mcp_calls SET state=?,result=?,updatedAt=? WHERE id=?",
-        error instanceof PolicyError ? "failed" : "uncertain",
+        error instanceof PolicyError || error instanceof McpNotSentError
+          ? "failed"
+          : "uncertain",
         JSON.stringify(result),
         Date.now(),
         id,

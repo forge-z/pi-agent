@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { Store, Action } from "./store.js";
-import { PolicyError, type ToolGateway } from "./mcp.js";
+import { McpNotSentError, PolicyError, type ToolGateway } from "./mcp.js";
 
 export class Actions {
   constructor(
@@ -83,6 +83,7 @@ export class Actions {
     conversationId: string,
     id: string,
     decision: "approve" | "deny",
+    signal?: AbortSignal,
   ) {
     const action = this.store.get<Action>(
       "SELECT * FROM actions WHERE id=? AND conversationId=?",
@@ -111,6 +112,7 @@ export class Actions {
         action.tool,
         JSON.parse(action.args) as Record<string, unknown>,
         "action",
+        signal,
       );
       const failed =
         typeof result === "object" &&
@@ -126,12 +128,16 @@ export class Actions {
     } catch (error) {
       this.store.run(
         "UPDATE actions SET state=?,result=? WHERE id=?",
-        error instanceof PolicyError ? "failed" : "uncertain",
+        error instanceof PolicyError || error instanceof McpNotSentError
+          ? "failed"
+          : "uncertain",
         JSON.stringify({
           message:
             error instanceof PolicyError
               ? "Ferramenta fora da política; não executada."
-              : "Resultado externo incerto. Verifique no serviço antes de reconciliar.",
+              : error instanceof McpNotSentError
+                ? "A chamada MCP não foi enviada. Nenhum efeito externo foi executado."
+                : "Resultado externo incerto. Verifique no serviço antes de reconciliar.",
         }),
         id,
       );

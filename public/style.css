@@ -1663,23 +1663,187 @@ dialog .fine {
   overflow-wrap: anywhere;
   font-size: 0.69rem;
 }
-#link-code {
-  margin: 22px 0 14px;
-  font-size: 0.83rem;
+.telegram-dialog {
+  width: min(calc(100% - 32px), 560px);
+  max-height: calc(100dvh - 32px);
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
-#copy-link {
-  width: 100%;
+.telegram-dialog .dialog-icon {
+  margin-bottom: 10px;
 }
-#open-telegram {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 44px;
-  margin: 12px 0;
-  padding: 11px 18px;
+.telegram-dialog h2 {
+  margin-bottom: 6px;
+}
+.telegram-intro {
+  margin-bottom: 12px;
+  line-height: 1.5;
+}
+.telegram-overview {
+  display: grid;
+  gap: 7px;
+  margin: 10px 0 12px;
+  padding: 10px;
   border: 1px solid var(--line);
-  border-radius: 9px;
+  border-radius: 12px;
+  background: var(--soft);
+}
+.telegram-status-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+.telegram-state {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--card);
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+.telegram-state[data-state="connected"] {
+  color: var(--success);
+  background: var(--success-soft);
+}
+.telegram-state[data-state="blocked"],
+.telegram-state[data-state="webhook_conflict"],
+.telegram-state[data-state="migration_required"] {
+  color: var(--danger);
+  background: var(--card);
+}
+#telegram-bot {
+  overflow-wrap: anywhere;
+}
+.telegram-status-message,
+.telegram-first-message,
+.telegram-last-success {
+  margin: 0;
+  line-height: 1.45;
+}
+.telegram-status-message:empty,
+.telegram-first-message:empty,
+.telegram-last-success:empty {
+  display: none;
+}
+.telegram-linked,
+.telegram-target {
+  display: grid;
+  gap: 3px;
+  padding-top: 6px;
+  border-top: 1px solid var(--line);
+}
+.telegram-linked strong,
+.telegram-target strong {
+  font-size: 0.86rem;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.telegram-linked code,
+.telegram-target code {
+  display: inline;
+  width: fit-content;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 0.67rem;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+.telegram-form {
+  display: grid;
+  gap: 6px;
+}
+.telegram-field label {
+  margin: 8px 0;
+}
+.telegram-field .fine {
+  margin: 6px 0 0;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.telegram-field input {
+  min-height: 48px;
+}
+.telegram-form-error {
+  min-height: 0;
+  margin: 0;
+}
+.telegram-form-error:empty {
+  display: none;
+}
+.telegram-actions,
+.telegram-retry-actions,
+.telegram-conflict-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 9px;
+  margin-top: 8px;
+}
+.telegram-actions > button,
+.telegram-actions > a,
+.telegram-retry-actions > button,
+.telegram-conflict-actions > button {
+  flex: 1 1 145px;
+  min-height: 46px;
+}
+.telegram-open-bot {
+  text-align: center;
   text-decoration: none;
+}
+.telegram-conflict {
+  margin-top: 22px;
+  padding: 16px;
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  background: var(--warning-soft);
+}
+.telegram-conflict .eyebrow {
+  margin-bottom: 8px;
+}
+.telegram-conflict h3 {
+  margin-bottom: 9px;
+  font-size: 1rem;
+  line-height: 1.4;
+}
+.telegram-conflict p {
+  font-size: 0.78rem;
+}
+.telegram-conflict-bot:empty {
+  display: none;
+}
+.telegram-webhook-url {
+  display: block;
+  margin: 6px 0 12px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--card);
+  color: var(--ink);
+  font-size: 0.73rem;
+  overflow-wrap: anywhere;
+}
+.telegram-conflict-actions {
+  margin-top: 10px;
+}
+@media (max-width: 760px) {
+  .telegram-dialog {
+    max-height: calc(100dvh - 16px);
+    padding: 20px;
+  }
+  .telegram-overview {
+    margin: 10px 0 12px;
+    padding: 10px;
+  }
 }
 #auth-form > button {
   margin: 14px 0;
@@ -1955,16 +2119,16 @@ dialog .fine {
     height: 6px;
     margin-right: 10px;
   }
-  #link-button {
+  #telegram-button {
     padding: 10px;
     min-height: 44px;
     width: 44px;
     border-color: var(--line);
   }
-  #link-button span {
+  #telegram-button span {
     display: none;
   }
-  #link-button .icon {
+  #telegram-button .icon {
     width: 20px;
     height: 20px;
   }
@@ -2889,6 +3053,10 @@ dialog .fine {
     .action,
     .deliveries,
     .dialog-icon,
+    .telegram-overview,
+    .telegram-state,
+    .telegram-conflict,
+    .telegram-webhook-url,
     .section-icon,
     .permission-note,
     .management-card,

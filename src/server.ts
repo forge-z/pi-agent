@@ -15,12 +15,17 @@ import { TaskError } from "./tasks.js";
 import { SettingsError } from "./settings.js";
 import { commandCatalog, CommandError } from "./commands.js";
 import { PolicyError, McpError } from "./mcp.js";
+import {
+  TelegramConnection,
+  TelegramSetupError,
+} from "./telegram-connection.js";
 export interface ServerOptions {
   password: string;
   origin: string;
   secureCookie: boolean;
   telegram?: Telegram;
   telegramSecret?: string;
+  telegramConnection?: TelegramConnection;
   publicDir?: string;
 }
 const equal = (a: string, b: string) =>
@@ -64,6 +69,13 @@ const json = (response: ServerResponse, status: number, value: unknown) => {
   response.end(JSON.stringify(value));
 };
 export function createAppServer(app: Runtime, options: ServerOptions) {
+  const telegramConnection =
+    options.telegramConnection ?? new TelegramConnection(app);
+  void telegramConnection
+    .restore()
+    .catch(() =>
+      console.error("Não foi possível restaurar a conexão Telegram"),
+    );
   const login = new ProviderLogin(app.models, app.store);
   const tasks = app.tasks;
   tasks.start();
@@ -158,6 +170,20 @@ export function createAppServer(app: Runtime, options: ServerOptions) {
       }
       if (path.startsWith("/api/")) {
         if (!authenticated) throw new HttpError(401, "Faça login na interface");
+        if (path === "/api/telegram" && method === "GET")
+          return json(response, 200, telegramConnection.snapshot());
+        if (path === "/api/telegram/connect" && method === "POST")
+          return json(
+            response,
+            200,
+            await telegramConnection.connect(await body(request)),
+          );
+        if (path === "/api/telegram/disconnect" && method === "POST")
+          return json(
+            response,
+            200,
+            await telegramConnection.disconnect(await body(request)),
+          );
         if (path === "/api/logout" && method === "POST") {
           app.store.run("DELETE FROM sessions WHERE token=?", owner);
           response.setHeader(
@@ -476,6 +502,7 @@ export function createAppServer(app: Runtime, options: ServerOptions) {
           "text/javascript",
         ],
         "/settings.js": ["settings.js", "text/javascript"],
+        "/telegram.js": ["telegram.js", "text/javascript"],
         "/style.css": ["style.css", "text/css"],
         "/manifest.webmanifest": [
           "manifest.webmanifest",
@@ -529,7 +556,8 @@ export function createAppServer(app: Runtime, options: ServerOptions) {
           error instanceof CommandError ||
           error instanceof TaskError ||
           error instanceof PolicyError ||
-          error instanceof McpError
+          error instanceof McpError ||
+          error instanceof TelegramSetupError
             ? error.message
             : "Não foi possível processar a operação",
       });
@@ -540,6 +568,7 @@ export function createAppServer(app: Runtime, options: ServerOptions) {
     if (timer) clearInterval(timer);
     login.close();
     await options.telegram?.drain();
+    await telegramConnection.close();
     for (const stream of streams) stream.end();
     await new Promise<void>((resolve, reject) =>
       server.close((e) => (e ? reject(e) : resolve())),
