@@ -2,6 +2,7 @@ import type { Runtime } from "./runtime.js";
 import { hash, type Delivery } from "./store.js";
 import { CommandError } from "./commands.js";
 import { SettingsError } from "./settings.js";
+import { taskTelegramAuthorized } from "./task-telegram.js";
 export interface TelegramUpdate {
   update_id: number;
   message?: {
@@ -52,6 +53,7 @@ export class Telegram {
     private chats: string[],
     readonly botUsername?: string,
     private privateDm = false,
+    private botId?: number,
   ) {
     this.botUsername = botUsername?.trim().replace(/^@/, "") || undefined;
     if (this.botUsername && !/^[a-zA-Z0-9_]{5,32}$/.test(this.botUsername))
@@ -293,6 +295,22 @@ export class Telegram {
       "SELECT * FROM deliveries WHERE state='pending' ORDER BY rowid",
     )) {
       if (this.closing) break;
+      if (
+        !taskTelegramAuthorized(
+          this.app.store,
+          delivery.id,
+          this.users,
+          this.chats,
+          this.botId,
+        )
+      ) {
+        this.app.store.run(
+          "UPDATE deliveries SET state='cancelled',result=? WHERE id=? AND state='pending'",
+          "Vínculo Telegram revogado antes do envio.",
+          delivery.id,
+        );
+        continue;
+      }
       if (this.privateDm && !this.chats.includes(delivery.chat)) continue;
       const changed = this.app.store.run(
         "UPDATE deliveries SET state='sending' WHERE id=? AND state='pending'",

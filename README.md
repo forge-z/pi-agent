@@ -23,6 +23,8 @@ Digite `/` no compositor para encontrar `/agents`, `/model`, `/thinking`, `/comp
 
 O Telegram registra esse catálogo no menu nativo `/` do chat privado autorizado depois da primeira mensagem. O diálogo mostra o estado do registro; menus de outros chats e menus alheios existentes são preservados. Novas respostas usam HTML seguro para negrito, itálico, links e código, com divisão de mensagens longas antes de entrar na fila persistente.
 
+Resultados de tarefas e crons também entram nessa fila quando a conversa mantém o vínculo privado ativo. A autorização é conferida antes de cada envio; revogação cancela partes pendentes e resultados incertos não são reenviados. Resultados de ocorrências concluídas sem vínculo não são enviados depois de uma conexão nova. Veja [entrega de tarefas](docs/cron-telegram-delivery.md).
+
 | Variável                             | Uso                                                                                                                                                                                                                                                                   |
 | ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `WEB_PASSWORD` / `WEB_PASSWORD_FILE` | Senha da interface, com no mínimo 12 caracteres. O arquivo tem precedência quando definido. Separe essa senha do login do provider.                                                                                                                                   |

@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { CronExpressionParser } from "cron-parser";
 import type { Runtime } from "./runtime.js";
+import { queueTaskTelegram } from "./task-telegram.js";
 
 export class TaskError extends Error {
   constructor(message: string) {
@@ -457,12 +458,27 @@ export class Tasks {
           run.requestId,
         );
         // A committed input may still execute. Preserve it for idempotent recovery.
-        if (!request)
-          store.run(
-            "UPDATE task_runs SET state='failed',error=? WHERE id=?",
-            error,
-            run.id,
-          );
+        if (!request) {
+          store.db.exec("SAVEPOINT task_admission_failure");
+          try {
+            queueTaskTelegram(
+              store,
+              run.conversationId,
+              run.requestId,
+              "A tarefa não pôde iniciar. Confira sua conexão e o estado da tarefa na web.",
+            );
+            store.run(
+              "UPDATE task_runs SET state='failed',error=? WHERE id=?",
+              error,
+              run.id,
+            );
+            store.db.exec("RELEASE SAVEPOINT task_admission_failure");
+          } catch (error) {
+            store.db.exec("ROLLBACK TO SAVEPOINT task_admission_failure");
+            store.db.exec("RELEASE SAVEPOINT task_admission_failure");
+            throw error;
+          }
+        }
       }
     }
   }
