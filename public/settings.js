@@ -686,6 +686,45 @@ export function configureUI(api, callbacks) {
     const tasks = await api("/api/tasks");
     renderTasks(tasks);
   }
+  async function telegramAvailable(conversationId) {
+    const query = new URLSearchParams({ conversationId });
+    const result = await api(
+      `/api/tasks/telegram-availability?${query.toString()}`,
+    );
+    return result.available === true;
+  }
+  async function updateTaskDeliveryHint(select, conversationId, hint) {
+    const selected = select.value;
+    if (selected === "web") {
+      hint.textContent =
+        "Todo resultado fica na conversa web. Nenhuma cópia será enviada ao Telegram.";
+      return true;
+    }
+    if (selected === "legacy") {
+      hint.textContent =
+        "Este agendamento preserva o comportamento anterior: envia ao Telegram quando há um vínculo autorizado.";
+      return true;
+    }
+    if (!conversationId) {
+      hint.textContent =
+        "Escolha uma conversa vinculada ao Telegram para habilitar essa cópia.";
+      return false;
+    }
+    hint.textContent = "Verificando o vínculo desta conversa…";
+    try {
+      const available = await telegramAvailable(conversationId);
+      if (select.value !== selected) return false;
+      hint.textContent = available
+        ? "O resultado também será enviado ao Telegram desta conversa enquanto o vínculo autorizado permanecer ativo."
+        : "Telegram não está conectado e autorizado para esta conversa. Conecte o bot e vincule a conversa escolhida; o resultado continuará disponível na web.";
+      return available;
+    } catch {
+      if (select.value === selected)
+        hint.textContent =
+          "Não foi possível verificar o vínculo agora. A seleção será validada ao salvar; o resultado permanece na conversa web.";
+      return false;
+    }
+  }
   async function openTasks() {
     feedback("tasks-feedback", "Carregando suas tarefas…");
     await callbacks.loadConversations();
@@ -697,6 +736,11 @@ export function configureUI(api, callbacks) {
     );
     if (callbacks.getConversationId())
       $("task-conversation").value = callbacks.getConversationId();
+    await updateTaskDeliveryHint(
+      $("task-delivery"),
+      $("task-conversation").value,
+      $("task-delivery-hint"),
+    );
     await loadTasks();
     feedback("tasks-feedback");
   }
@@ -711,6 +755,18 @@ export function configureUI(api, callbacks) {
   $("tasks-refresh").onclick = () => {
     void act("tasks-error", [$("tasks-refresh")], loadTasks);
   };
+  $("task-delivery").onchange = () =>
+    void updateTaskDeliveryHint(
+      $("task-delivery"),
+      $("task-conversation").value,
+      $("task-delivery-hint"),
+    );
+  $("task-conversation").onchange = () =>
+    void updateTaskDeliveryHint(
+      $("task-delivery"),
+      $("task-conversation").value,
+      $("task-delivery-hint"),
+    );
   function renderTasks(tasks) {
     const cards = tasks.map((task) => {
       const card = node("article", undefined, "management-card task-card");
@@ -741,6 +797,12 @@ export function configureUI(api, callbacks) {
           "card-meta",
         ),
       );
+      const deliveryLabel = {
+        legacy: "Telegram quando houver vínculo autorizado (comportamento atual)",
+        web: "Somente nesta conversa web",
+        web_telegram: "Conversa web e Telegram",
+      }[task.delivery] || "Destino desconhecido";
+      card.append(node("p", `Destino: ${deliveryLabel}`, "card-meta"));
       card.append(
         node(
           "p",
@@ -750,6 +812,61 @@ export function configureUI(api, callbacks) {
       );
       if (task.lastError) card.append(node("p", task.lastError, "error"));
       const actions = node("div", undefined, "card-buttons");
+      const editorId = `task-delivery-${task.id}`;
+      const editor = node("form", undefined, "management-form task-delivery-editor");
+      editor.hidden = true;
+      const field = node("div", undefined, "form-field");
+      const label = node("label", "Destino do resultado");
+      label.htmlFor = editorId;
+      const editorSelect = node("select");
+      editorSelect.id = editorId;
+      editorSelect.replaceChildren(
+        option("web", "Somente nesta conversa web"),
+        option("web_telegram", "Conversa web e Telegram"),
+        option("legacy", "Telegram quando houver vínculo (comportamento atual)"),
+      );
+      editorSelect.value = task.delivery;
+      const editorHint = node("small");
+      editorHint.setAttribute("aria-live", "polite");
+      field.append(label, editorSelect, editorHint);
+      const editorError = node("p", undefined, "error");
+      editorError.id = `task-delivery-error-${task.id}`;
+      editorError.setAttribute("role", "alert");
+      const editorActions = node("div", undefined, "form-actions");
+      const saveDelivery = node("button", "Salvar destino");
+      saveDelivery.type = "submit";
+      const cancelDelivery = button("Cancelar", () => {
+        editor.hidden = true;
+        editorSelect.value = task.delivery;
+        editorError.textContent = "";
+      });
+      editorActions.append(saveDelivery, cancelDelivery);
+      editor.append(field, editorError, editorActions);
+      editorSelect.onchange = () =>
+        void updateTaskDeliveryHint(editorSelect, task.conversationId, editorHint);
+      editor.onsubmit = (event) => {
+        event.preventDefault();
+        void act(editorError.id, [saveDelivery], async () => {
+          if (
+            editorSelect.value === "web_telegram" &&
+            !(await telegramAvailable(task.conversationId))
+          )
+            throw new Error(
+              "Telegram não está conectado e autorizado para esta conversa. Conecte o bot e vincule a conversa escolhida.",
+            );
+          await api(`/api/tasks/${encodeURIComponent(task.id)}`, "PUT", {
+            delivery: editorSelect.value,
+          });
+          await loadTasks();
+          feedback("tasks-feedback", "Destino da tarefa atualizado.");
+        });
+      };
+      const editDelivery = button("Editar destino", () => {
+        editor.hidden = !editor.hidden;
+        if (editor.hidden) return;
+        editorSelect.value = task.delivery;
+        void updateTaskDeliveryHint(editorSelect, task.conversationId, editorHint);
+      });
       const pause = button(task.enabled ? "Pausar" : "Retomar", () => {
         void act("tasks-error", [pause], async () => {
           await api(`/api/tasks/${encodeURIComponent(task.id)}`, "PUT", {
@@ -789,6 +906,7 @@ export function configureUI(api, callbacks) {
       });
       actions.append(
         open,
+        editDelivery,
         pause,
         run,
         deletionButton(
@@ -801,6 +919,7 @@ export function configureUI(api, callbacks) {
           "tasks-error",
         ),
       );
+      card.append(actions, editor);
       const history = node("details", undefined, "task-history");
       const log = node("div", undefined, "task-runs");
       const historyError = node("p", undefined, "error");
@@ -845,7 +964,7 @@ export function configureUI(api, callbacks) {
           historyError.textContent = error.message;
         }
       };
-      card.append(actions, history);
+      card.append(history);
       return card;
     });
     $("tasks-list").replaceChildren(
@@ -892,11 +1011,13 @@ export function configureUI(api, callbacks) {
         kind,
         schedule,
         timezone,
+        delivery: $("task-delivery").value,
       });
       $("task-title").value = "";
       $("task-prompt").value = "";
       $("task-once").value = "";
       $("task-cron").value = "";
+      $("task-delivery").value = "web";
       await loadTasks();
       feedback(
         "tasks-feedback",

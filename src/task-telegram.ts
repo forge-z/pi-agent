@@ -44,6 +44,12 @@ function activeRoute(store: Store, conversationId: string): Route | undefined {
   }
 }
 
+/** Report whether the current configured user/chat/bot mapping authorizes a
+ * conversation. The sender performs this check again immediately before send. */
+export function taskTelegramAvailable(store: Store, conversationId: string) {
+  return !!activeRoute(store, conversationId);
+}
+
 /** Freeze a terminal occurrence's destination, including a skipped notification.
  * Replays must never send an old result to a newly linked conversation/chat. */
 export function queueTaskTelegram(
@@ -52,8 +58,8 @@ export function queueTaskTelegram(
   requestId: string,
   result: string,
 ) {
-  const task = store.get<{ title: string }>(
-    `SELECT t.title FROM task_runs r JOIN tasks t ON t.id=r.taskId
+  const task = store.get<{ title: string; delivery: string }>(
+    `SELECT t.title,t.delivery FROM task_runs r JOIN tasks t ON t.id=r.taskId
      WHERE r.requestId=? AND t.conversationId=?`,
     requestId,
     conversationId,
@@ -63,6 +69,17 @@ export function queueTaskTelegram(
   store.db.exec("SAVEPOINT task_notification");
   try {
     if (!store.get("SELECT 1 FROM task_notifications WHERE id=?", id)) {
+      if (task.delivery === "web") {
+        store.run(
+          `INSERT INTO task_notifications(id,conversationId,requestId,chat,user,botId,state)
+           VALUES (?,?,?,NULL,NULL,NULL,'web_only')`,
+          id,
+          conversationId,
+          requestId,
+        );
+        store.db.exec("RELEASE SAVEPOINT task_notification");
+        return;
+      }
       const route = activeRoute(store, conversationId);
       store.run(
         `INSERT INTO task_notifications(id,conversationId,requestId,chat,user,botId,state)

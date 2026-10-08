@@ -47,7 +47,7 @@ async function fixture(answer = "**Resultado do cron**", linked = true) {
       JSON.stringify(config),
     );
   }
-  const task = await tasks.create({
+  const createdTask = await tasks.create({
     title: "Resumo",
     prompt: "Resuma esta conversa",
     kind: "cron",
@@ -55,6 +55,10 @@ async function fixture(answer = "**Resultado do cron**", linked = true) {
     timezone: "UTC",
     conversationId: id,
   });
+  // This fixture exercises the pre-destination behavior of schedules migrated
+  // from 007f62e; new tasks now default to web-only.
+  app.store.run("UPDATE tasks SET delivery='legacy' WHERE id=?", createdTask.id);
+  const task = tasks.get(createdTask.id)!;
   const sent: Array<{ chat: string; text: string }> = [];
   let uncertain = false;
   const transport = {
@@ -165,6 +169,55 @@ test("completed cron queues one Telegram result and retry/restart never duplicat
   }
 });
 
+test("web-only tasks keep a durable web decision and never queue Telegram deliveries", async () => {
+  const f = await fixture();
+  try {
+    f.tasks.setDelivery(f.task.id, "web");
+    const run = await f.run();
+    assert.equal(run.state, "done");
+    assert.equal(
+      f.app.store.get<{ state: string }>("SELECT state FROM task_notifications")
+        ?.state,
+      "web_only",
+    );
+    assert.equal(f.app.store.all("SELECT * FROM deliveries").length, 0);
+    await f.app.submit(
+      f.id,
+      run.requestId,
+      "Resuma esta conversa",
+      "task",
+      null,
+    );
+    await (await f.app.conversation(f.id)).waitForIdle(context);
+    await f.engine().flush();
+    assert.equal(f.app.store.all("SELECT * FROM task_notifications").length, 1);
+    assert.equal(f.app.store.all("SELECT * FROM deliveries").length, 0);
+    assert.equal(f.sent.length, 0);
+  } finally {
+    await f.close();
+  }
+});
+
+test("web plus Telegram sends one copy only after the explicit task selection", async () => {
+  const f = await fixture();
+  try {
+    f.tasks.setDelivery(f.task.id, "web_telegram");
+    const run = await f.run();
+    assert.equal(run.state, "done");
+    assert.equal(f.app.store.all("SELECT * FROM deliveries").length, 1);
+    assert.equal(
+      f.app.store.get<{ state: string }>("SELECT state FROM task_notifications")
+        ?.state,
+      "queued",
+    );
+    await f.engine().flush();
+    assert.equal(f.sent.length, 1);
+    assert.match(f.sent[0]!.text, /Tarefa: Resumo/);
+  } finally {
+    await f.close();
+  }
+});
+
 test("a terminal task answer beyond the first thousand history entries is delivered intact", async () => {
   const f = await fixture("Resposta final depois do histórico extenso");
   try {
@@ -243,6 +296,7 @@ test("a task in the conversation selected through Telegram uses its current mapp
       schedule: "* * * * *",
       timezone: "UTC",
       conversationId: current,
+      delivery: "web_telegram",
     });
     await f.tasks.runNow(task.id, "synthetic-manual-occurrence");
     await (await f.app.conversation(current)).waitForIdle(context);

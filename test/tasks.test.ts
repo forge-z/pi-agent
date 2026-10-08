@@ -136,6 +136,97 @@ test("creation receipts deduplicate concurrent calls and survive restart even af
   }
 });
 
+test("old task rows migrate to legacy delivery and new tasks default to web", async () => {
+  const f = await fixture();
+  let migrated: Tasks | undefined;
+  try {
+    await f.tasks.close();
+    const conversationId = await f.runtime.create();
+    f.store.db.exec("DROP TABLE tasks");
+    f.store.db.exec(`CREATE TABLE tasks (
+      id TEXT PRIMARY KEY, title TEXT NOT NULL, prompt TEXT NOT NULL,
+      conversationId TEXT NOT NULL, kind TEXT NOT NULL, schedule TEXT NOT NULL,
+      timezone TEXT NOT NULL, enabled INTEGER NOT NULL, nextRun INTEGER,
+      lastError TEXT, deleted INTEGER NOT NULL DEFAULT 0
+    )`);
+    f.store.run(
+      "INSERT INTO tasks VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+      "legacy-task",
+      "Old reminder",
+      "Read the conversation",
+      conversationId,
+      "cron",
+      "* * * * *",
+      "UTC",
+      1,
+      epoch + 60000,
+      null,
+      0,
+    );
+    migrated = new Tasks(f.runtime as unknown as Runtime, () => epoch);
+    assert.equal(migrated.get("legacy-task")?.delivery, "legacy");
+    const created = await migrated.create({
+      ...cron,
+      conversationId,
+    });
+    assert.equal(created.delivery, "web");
+  } finally {
+    await migrated?.close();
+    await f.close();
+  }
+});
+
+test("Telegram delivery creation and updates require the current authorized binding", async () => {
+  const f = await fixture();
+  try {
+    const conversationId = await f.runtime.create();
+    const task = await f.tasks.create({ ...cron, conversationId });
+    assert.equal(task.delivery, "web");
+    assert.equal(f.tasks.telegramAvailability(conversationId), false);
+    await assert.rejects(
+      f.tasks.create({ ...cron, conversationId, delivery: "web_telegram" }),
+      /conectado e autorizado/,
+    );
+    assert.throws(
+      () => f.tasks.setDelivery(task.id, "web_telegram"),
+      /conectado e autorizado/,
+    );
+    const binding = {
+      enabled: true,
+      bot: { id: 123456 },
+      userId: "42",
+      chatId: "42",
+      conversationId,
+    };
+    f.store.run("INSERT INTO telegram VALUES (?,?,?)", "42", conversationId, "42");
+    f.store.run(
+      "INSERT INTO telegram_grants VALUES (?,?,?)",
+      "42",
+      "42",
+      conversationId,
+    );
+    f.store.run(
+      "INSERT INTO meta VALUES (?,?)",
+      "telegram:connection",
+      JSON.stringify(binding),
+    );
+    assert.equal(f.tasks.telegramAvailability(conversationId), true);
+    const originalNextRun = task.nextRun;
+    const telegramTask = f.tasks.setDelivery(task.id, "web_telegram");
+    assert.equal(telegramTask.delivery, "web_telegram");
+    assert.equal(telegramTask.nextRun, originalNextRun);
+    assert.equal(f.tasks.setDelivery(task.id, "web").delivery, "web");
+    f.store.run("DELETE FROM telegram_grants");
+    assert.equal(f.tasks.telegramAvailability(conversationId), false);
+    assert.throws(
+      () => f.tasks.setDelivery(task.id, "web_telegram"),
+      /conectado e autorizado/,
+    );
+  } finally {
+    await f.close();
+  }
+});
+
 test("schedule and creation receipt roll back together on a receipt storage failure", async () => {
   const f = await fixture();
   try {
