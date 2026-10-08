@@ -244,7 +244,7 @@ test("Telegram allowlist, one-use linking, duplicate updates and uncertain send 
     await wait(app, id);
     await tg.flush();
     await tg.flush();
-    assert.equal(sends, 1);
+    assert.equal(sends, 2); // One pairing acknowledgement and one model reply.
     assert.equal(
       app.store.get<{ state: string }>("SELECT state FROM deliveries")?.state,
       "uncertain",
@@ -254,7 +254,7 @@ test("Telegram allowlist, one-use linking, duplicate updates and uncertain send 
     tg = new Telegram(app, transport, ["42"], ["100"]);
     await tg.receive(update(3, "Hello"));
     await tg.flush();
-    assert.equal(sends, 1);
+    assert.equal(sends, 2);
     assert.equal(
       (await app.snapshot(id)).view.entries.filter((e) => e.kind === "pi.user")
         .length,
@@ -379,7 +379,11 @@ test("Telegram duplicate approvals persist outcome and send exactly one command 
     await tg.flush();
     await tg.flush();
     assert.equal(writes, 1);
-    assert.equal(sends, 1);
+    assert.equal(sends, 2); // One pairing acknowledgement and one approval acknowledgement.
+    assert.equal(
+      app.store.all("SELECT * FROM deliveries WHERE id='decision:11'").length,
+      1,
+    );
     assert.equal(
       app.store.get<{ status: string }>(
         "SELECT status FROM requests WHERE requestId=?",

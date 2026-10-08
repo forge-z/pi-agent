@@ -119,3 +119,19 @@ Estado final verificado em 8 de outubro de 2026, na branch local `feat/web-teleg
 ![Resultado real de compactação sem contexto](evidence/slash-commands/compact-noop.jpg)
 
 ![Ajuda no celular](evidence/slash-commands/help-mobile.jpg)
+
+## Correção do vínculo Telegram após o dispatcher de comandos
+
+Em 8 de outubro de 2026, na branch local `fix/telegram-pairing-dispatch`, partindo de `7b73215`: **90 testes passaram**, zero falhas e zero skips, em 32,75 segundos. `npm run check`, `npm run lint`, `npm run build`, `node --check public/app.js`, `git diff --check` e a leitura do Compose com Ruby YAML passaram. Node local: 26.0.0. Docker não está disponível nesta máquina; o container desta revisão não foi reconstruído nem publicado.
+
+O caminho literal `/link CODIGO` já era tratado antes do modelo. Foram reproduzidas duas falhas no código: colar o comando no chat web produz o erro de comando desconhecido; no Telegram, o teste literal de prefixo não reconhece espaços iniciais, `/link@BOT` nem `/start CODIGO`. O payload e o canal do incidente real não foram fornecidos, portanto a investigação não atribui uma dessas variantes ao usuário. A correção cobre essas entradas e mantém a rejeição de comandos desconhecidos.
+
+O teste de integração executa os handlers reais de abrir/copy do diálogo contra a API HTTP autenticada em loopback; entrega o texto copiado ao webhook com transporte mock; verifica segredo do webhook, allowlists, vínculo da mesma conversa, consumo único e ausência de chamada ao provider. Outros testes exercitam `/start` sem grant, payload e sufixo do próprio bot, outro bot ignorado, código expirado/inválido, fingerprints, duplicação concorrente, recibos após reinício, impossibilidade de reverter um vínculo posterior por retry antigo, envio incerto sem replay e rollback de vínculo/grant/recibo/confirmação quando o armazenamento da entrega falha. Mensagens com escape explícito `//` preservam seu conteúdo e espaços; somente comandos são normalizados.
+
+Na prévia local, o diálogo, a confirmação **Comando copiado**, o link de abertura e a orientação ao colar o comando na web foram verificados. Desktop 1280×720 e mobile 390×844; largura da página no celular: 390 px, sem overflow. O link tem alvo de toque de 44 px e o diálogo cabe no viewport. Console sem erros. Os códigos nas capturas são descartáveis de uma base local apagada ao encerrar a prévia; nenhum token ou conta real foi usado. O link `t.me` não foi aberto. A aba e o processo temporários foram encerrados e o viewport restaurado. Nenhum webhook foi registrado, nenhuma mensagem real enviada, e não houve push/merge/deploy.
+
+![Comando copiado e orientação de canal no desktop](evidence/telegram-pairing/copy-desktop.jpg)
+
+![Diálogo de vínculo no celular](evidence/telegram-pairing/copy-mobile.jpg)
+
+![Orientação ao colar o comando no chat web](evidence/telegram-pairing/wrong-channel-mobile.jpg)

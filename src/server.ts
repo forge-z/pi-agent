@@ -368,11 +368,19 @@ export function createAppServer(app: Runtime, options: ServerOptions) {
               }),
             );
           }
-          if (resource === "link" && method === "POST")
+          if (resource === "link" && method === "POST") {
+            const code = app.store.link(id);
             return json(response, 201, {
-              code: app.store.link(id),
+              code,
+              command: `/link ${code}`,
               expiresIn: 600,
+              ...(options.telegram?.botUsername
+                ? {
+                    url: `https://t.me/${options.telegram.botUsername}?start=${code}`,
+                  }
+                : {}),
             });
+          }
           if (resource === "actions" && method === "POST" && actionId) {
             const input = await body(request);
             const decision = text(input.decision);

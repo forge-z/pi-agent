@@ -46,6 +46,8 @@ Para ativar o bot, configure token, segredo de webhook, `TELEGRAM_ALLOWED_USERS`
 
 O bot responde mensagens recebidas e envia respostas concluídas por uma fila persistente. Se o resultado do envio ficar ambíguo, a entrega passa a `uncertain` e não é reenviada automaticamente para evitar duplicação. A aprovação Telegram não usa callback.
 
+`/link CODIGO` e `/start CODIGO` são despachados pelo transporte antes dos comandos gerais e nunca chegam ao modelo. `/start` sem código fornece orientação, sem pareamento automático. Com `TELEGRAM_BOT_USERNAME`, o transporte remove apenas o sufixo do próprio bot e a web pode oferecer um link de abertura `t.me`; mensagens dirigidas a outro bot são ignoradas. Consumo do código, grant, recibo e confirmação de vínculo usam uma transação SQLite. O conteúdo persistido contém hashes dos códigos e fingerprints dos updates; as confirmações e os erros não repetem o código.
+
 ## Limites conhecidos
 
 É uma implantação de um operador, uma instância e um diretório de dados; não há RBAC multiusuário nem coordenação entre réplicas. OAuth live e Telegram dependem de credenciais e autorização do operador e ainda não foram validados neste ambiente. A configuração MCP também precisa ser validada contra os servidores reais. A UI carrega o histórico ativo; não há busca ou paginação do histórico na interface.

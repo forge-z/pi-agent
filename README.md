@@ -32,6 +32,7 @@ Digite `/` no compositor para encontrar `/agents`, `/model`, `/thinking`, `/comp
 | `MCP_CONFIG_FILE`                                                   | Arquivo JSON opcional com servidores MCP HTTP(S). Veja [docs/mcp.example.json](docs/mcp.example.json).                              |
 | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET` / variantes `_FILE` | Segredos opcionais para habilitar Telegram, por variável ou arquivo. Exige também as allowlists de usuário e chat.                  |
 | `TELEGRAM_ALLOWED_USERS`, `TELEGRAM_ALLOWED_CHATS`                  | IDs separados por vírgula; ambos são exigidos quando o bot está ativo.                                                              |
+| `TELEGRAM_BOT_USERNAME`                                             | Username público opcional do bot, sem `@`; habilita abertura com código e sufixos dirigidos ao bot.                                 |
 
 Use `npm run build` para compilar; `npm start` inicia `dist/src/main.js`. O runtime usa Pi Durable 1.0.4, Pi AI 1.0.4, SQLite integrado do Node e o SDK MCP por HTTP.
 

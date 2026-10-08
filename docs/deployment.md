@@ -33,6 +33,8 @@ O contêiner escuta na porta `3000` apenas na rede Compose; encaminhe o domínio
 
 Telegram é opcional. Informe `TELEGRAM_BOT_TOKEN` e `TELEGRAM_WEBHOOK_SECRET` como variáveis de runtime, além de `TELEGRAM_ALLOWED_USERS` e `TELEGRAM_ALLOWED_CHATS` como listas separadas por vírgula, limitadas aos IDs autorizados. Sem token, o transporte fica desabilitado. Para a alternativa por arquivos, configure `TELEGRAM_BOT_TOKEN_SECRET_FILE` e `TELEGRAM_WEBHOOK_SECRET_FILE` e descomente os blocos correspondentes em `docker-compose.secrets.yml`.
 
+Opcionalmente, defina `TELEGRAM_BOT_USERNAME` com o username público do seu bot, sem `@`. Isso habilita o botão de abertura do bot com código (`/start CODIGO`) e aceita sufixos `@USERNAME` apenas para esse bot. Sem username, copie `/link CODIGO` e envie diretamente ao bot no Telegram. O comando não deve ser enviado ao chat web do Pi. `/start` sozinho apenas orienta e não relaxa as allowlists nem cria vínculo.
+
 MCP também é opcional e aceita endpoints HTTPS via Streamable HTTP; HTTP só é aceito em loopback para testes locais. Revise `mcp.json`, monte-o em `/app/config/mcp.json` como somente leitura e defina `MCP_CONFIG_FILE=/app/config/mcp.json`. Não monte sockets, diretórios amplos ou credenciais administrativas.
 
 ## Dados e manutenção

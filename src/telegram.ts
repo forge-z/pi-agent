@@ -41,7 +41,23 @@ export class Telegram {
     private transport: TelegramTransport,
     private users: string[],
     private chats: string[],
-  ) {}
+    readonly botUsername?: string,
+  ) {
+    this.botUsername = botUsername?.trim().replace(/^@/, "") || undefined;
+    if (this.botUsername && !/^[a-zA-Z0-9_]{5,32}$/.test(this.botUsername))
+      throw new Error("TELEGRAM_BOT_USERNAME deve ser o username do bot");
+  }
+  private commandText(raw: string) {
+    const start = raw.trimStart();
+    if (!start.startsWith("/") || start.startsWith("//")) return raw;
+    const text = raw.trim();
+    const addressed = /^\/[a-z]+@([a-z0-9_]+)(?=\s|$)/i.exec(text);
+    if (!addressed) return text;
+    // Never execute a command intended for another bot or guess our identity.
+    if (addressed[1].toLowerCase() !== this.botUsername?.toLowerCase())
+      return undefined;
+    return text.replace(/^(\/[a-z]+)@[a-z0-9_]+/i, "$1");
+  }
   async receive(update: TelegramUpdate) {
     const message = update.message;
     if (
@@ -55,6 +71,8 @@ export class Telegram {
       chat = String(message.chat.id);
     if (!this.users.includes(user) || !this.chats.includes(chat))
       return { ignored: true };
+    const text = this.commandText(message.text);
+    if (text === undefined) return { ignored: true };
     const fingerprint = hash(JSON.stringify([user, chat, message.text]));
     const previous = this.app.store.get<{ fingerprint: string }>(
       "SELECT fingerprint FROM telegram_updates WHERE id=?",
@@ -66,13 +84,16 @@ export class Telegram {
       "SELECT * FROM telegram WHERE chat=?",
       chat,
     );
-    if (!message.text.startsWith("/link ") && (!linked || linked.user !== user))
+    if (
+      !/^\/(link|start)(?:\s|$)/.test(text) &&
+      (!linked || linked.user !== user)
+    )
       throw new Error(
         "Conversa não vinculada a este usuário; use /link CODIGO pela web",
       );
     const inFlight = this.receives.get(update.update_id);
     if (inFlight) return inFlight;
-    const operation = this.accept(update, user, chat, fingerprint);
+    const operation = this.accept(update, user, chat, fingerprint, text);
     this.receives.set(update.update_id, operation);
     void operation
       .finally(() => this.receives.delete(update.update_id))
@@ -84,8 +105,8 @@ export class Telegram {
     user: string,
     chat: string,
     fingerprint: string,
+    text: string,
   ) {
-    const message = update.message!;
     // Re-delivered commands reuse the update key; never consume a link or approve twice.
     const commandKey = `telegram:update:${update.update_id}`;
     const existing = this.app.store.get<{ value: string }>(
@@ -122,9 +143,20 @@ export class Telegram {
     );
     let response: unknown;
     let errorReply: string | undefined;
-    if (message.text!.startsWith("/link ")) {
+    const pairing = /^\/(link|start)(?:\s+([\s\S]*))?$/.exec(text);
+    if (pairing?.[1] === "start" && !pairing[2]) {
+      errorReply =
+        linked?.user === user
+          ? "Conversa vinculada. Use /help para consultar os comandos. Para vincular outra conversa, gere um código na interface web."
+          : "Abra a conversa na interface web, escolha Vincular Telegram e envie /link CODIGO aqui. O código é de uso único e expira em 10 minutos.";
+      response = { info: errorReply };
+    } else if (pairing) {
+      if (!/^[a-f0-9]{32}$/.test(pairing[2] ?? ""))
+        throw new CommandError(
+          "Uso: /link CODIGO ou /start CODIGO, com o código gerado na interface web.",
+        );
       const conversationId = this.app.store.consumeLink(
-        message.text!.slice(6).trim(),
+        pairing[2],
         chat,
         user,
         commandKey,
@@ -136,7 +168,7 @@ export class Telegram {
         throw new Error(
           "Vincule esta conversa na interface web com /link CODIGO",
         );
-      const decision = /^\/(approve|deny) ([a-f0-9]{24})$/.exec(message.text!);
+      const decision = /^\/(approve|deny)\s+([a-f0-9]{24})$/.exec(text);
       if (decision) {
         const action = await this.app.actions.decide(
           linked.conversationId,
@@ -157,7 +189,7 @@ export class Telegram {
           response = await this.app.admit(
             linked.conversationId,
             `telegram:${update.update_id}`,
-            message.text!,
+            text,
             { source: "telegram", chat, user },
           );
         } catch (error) {

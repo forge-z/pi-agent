@@ -110,12 +110,19 @@ export class Store {
         user,
         link.conversationId,
       );
-      if (updateKey)
+      if (updateKey) {
         this.run(
           "INSERT OR IGNORE INTO meta VALUES (?,?)",
           updateKey,
           JSON.stringify({ linked: link.conversationId }),
         );
+        this.run(
+          "INSERT OR IGNORE INTO deliveries(id,chat,text) VALUES (?,?,?)",
+          `link:${updateKey}`,
+          chat,
+          "Conversa vinculada. O histórico é compartilhado com a web. Use /help para consultar os comandos.",
+        );
+      }
       this.db.exec("COMMIT");
       return link.conversationId;
     } catch (e) {

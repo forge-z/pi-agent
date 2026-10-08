@@ -452,6 +452,13 @@ export class Runtime {
     text: string,
     access: CommandAccess,
   ) {
+    if (
+      access.source === "web" &&
+      /^\/(link|start)(?:@[a-zA-Z0-9_]+)?(?:\s|$)/.test(text.trim())
+    )
+      throw new CommandError(
+        "Este comando deve ser enviado ao seu bot no Telegram. Abra Vincular Telegram para copiar o comando ou abrir o bot.",
+      );
     if (parseCommand(text))
       return this.commands.execute(conversationId, requestId, text, access);
     if (

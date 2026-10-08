@@ -1221,7 +1221,10 @@ $("link-button").onclick = guard(async () => {
     {},
   );
   $("copy-link").querySelector("span").textContent = "Copiar comando";
-  $("link-code").textContent = `/link ${link.code}`;
+  $("link-code").textContent = link.command;
+  $("open-telegram").hidden = !link.url;
+  if (link.url) $("open-telegram").href = link.url;
+  else $("open-telegram").removeAttribute("href");
   $("link-dialog").showModal();
 });
 $("copy-link").onclick = guard(async () => {

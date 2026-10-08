@@ -45,7 +45,13 @@ if (token && (!telegramSecret || !users.length || !chats.length))
   throw new Error("Telegram exige segredo webhook e allowlists de user e chat");
 const app = await Runtime.open(runtimeOptions);
 const telegram = token
-  ? new Telegram(app, new TelegramHttp(token), users, chats)
+  ? new Telegram(
+      app,
+      new TelegramHttp(token),
+      users,
+      chats,
+      process.env.TELEGRAM_BOT_USERNAME,
+    )
   : undefined;
 const web = createAppServer(app, {
   password,
