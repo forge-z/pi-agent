@@ -13,6 +13,7 @@ class Element {
   children: Element[] = [];
   classList = { toggle() {} };
   onclick?: () => void;
+  ontoggle?: () => void;
   constructor(public tagName: string) {}
   setAttribute(name: string, value: string) {
     this.attributes.set(name, value);
@@ -35,28 +36,33 @@ const source = readFileSync(
   new URL("../public/tools.js", import.meta.url),
   "utf8",
 );
-const { attachToolVisibility, createToolCalls, toolResultNeedsAttention } =
-  runInNewContext(
-    `${source.replaceAll("export ", "")}\n({attachToolVisibility, createToolCalls, toolResultNeedsAttention})`,
-  ) as {
-    attachToolVisibility(options: {
-      button: Element;
-      messages: Element;
-      storage(): {
-        getItem(key: string): string | null;
-        setItem(key: string, value: string): void;
-      };
-    }): { apply(): void };
-    createToolCalls(
-      content: unknown,
-      options: {
-        document: { createElement(tag: string): Element };
-        icon(name: string): Element;
-        live?: boolean;
-      },
-    ): Element[];
-    toolResultNeedsAttention(message: ToolMessage): boolean;
-  };
+const {
+  attachToolVisibility,
+  attachToolBody,
+  createToolCalls,
+  toolResultNeedsAttention,
+} = runInNewContext(
+  `${source.replaceAll("export ", "")}\n({attachToolVisibility, attachToolBody, createToolCalls, toolResultNeedsAttention})`,
+) as {
+  attachToolVisibility(options: {
+    button: Element;
+    messages: Element;
+    storage(): {
+      getItem(key: string): string | null;
+      setItem(key: string, value: string): void;
+    };
+  }): { apply(): void };
+  attachToolBody(details: Element, body: Element, render: () => Element): void;
+  createToolCalls(
+    content: unknown,
+    options: {
+      document: { createElement(tag: string): Element };
+      icon(name: string): Element;
+      live?: boolean;
+    },
+  ): Element[];
+  toolResultNeedsAttention(message: ToolMessage): boolean;
+};
 
 function fixture(initial?: string) {
   const values = new Map(initial ? [["pi:tool-details", initial]] : []);
@@ -138,6 +144,13 @@ test("hidden preference also applies to new history and streaming tool calls", (
       call.children[0]?.children[1]?.textContent ?? "",
       /mock_execute/,
     );
+    assert.equal(
+      call.children[1]?.children.length,
+      0,
+      "closed arguments remain unrendered",
+    );
+    call.open = true;
+    call.ontoggle!();
     assert.equal(call.children[1]?.children[0]?.tagName, "pre");
     assert.match(
       call.children[1]?.children[0]?.textContent ?? "",
@@ -268,12 +281,22 @@ test("the chat renderer applies the preference to history and live updates while
   };
   runInNewContext(appSource.slice(start, end), {
     snapshot,
+    historyWindow: runInNewContext(
+      readFileSync(
+        new URL("../public/history.js", import.meta.url),
+        "utf8",
+      ).replaceAll("export ", "") + "\nhistoryWindow",
+    ),
+    historyPage: 0,
+    historyNodes: new Map(),
     $: get,
     document: { createElement: (tag: string) => node(tag) },
     node,
     icon: () => node("svg"),
     piMark: () => node("img"),
     renderMarkdown: (text: string) => node("div", text),
+    renderTextPreview: (text: string) => node("pre", text.slice(0, 32768)),
+    attachToolBody,
     createToolCalls,
     toolResultNeedsAttention,
     toolVisibility: ui.control,
@@ -302,4 +325,51 @@ test("the chat renderer applies the preference to history and live updates while
   assert.ok(assistants.every((element) => !element.hidden));
   ui.button.onclick!();
   assert.ok(tools.every((element) => !element.hidden));
+});
+
+test("closed tool bodies do no parser/DOM work and release expanded output on collapse", () => {
+  const detail = new Element("details"),
+    body = new Element("div");
+  let renders = 0;
+  attachToolBody(detail, body, () => {
+    renders++;
+    const pre = new Element("pre");
+    pre.textContent = "x".repeat(32768);
+    return pre;
+  });
+  assert.equal(renders, 0);
+  assert.equal(body.children.length, 0);
+  detail.open = true;
+  detail.ontoggle!();
+  detail.ontoggle!();
+  assert.equal(renders, 1);
+  assert.equal(body.children.length, 1);
+  detail.open = false;
+  detail.ontoggle!();
+  assert.equal(body.children.length, 0);
+  detail.open = true;
+  detail.ontoggle!();
+  assert.equal(renders, 2);
+});
+
+test("large tool arguments stay lazy and cannot create an unbounded text node", () => {
+  const calls = createToolCalls(
+    [
+      {
+        type: "toolCall",
+        name: "synthetic",
+        arguments: { image: "A".repeat(4 * 1024 * 1024) },
+      },
+    ],
+    {
+      document: { createElement: (tag) => new Element(tag) },
+      icon: () => new Element("svg"),
+    },
+  );
+  const call = calls[0]!;
+  const body = call.children[1]!;
+  assert.equal(body.children.length, 0);
+  call.open = true;
+  call.ontoggle!();
+  assert.equal(body.children[0]!.textContent.length, 32768);
 });
