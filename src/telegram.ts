@@ -3,6 +3,15 @@ import { hash, type Delivery } from "./store.js";
 import { CommandError } from "./commands.js";
 import { SettingsError } from "./settings.js";
 import { taskTelegramAuthorized } from "./task-telegram.js";
+import {
+  TELEGRAM_RELINK_GUIDANCE,
+  TELEGRAM_SELECTION_GUIDANCE,
+  type TelegramOwner,
+} from "./telegram-chats.js";
+interface ControlRoute extends TelegramOwner {
+  botId: number;
+  credentialBinding: string;
+}
 export interface TelegramUpdate {
   update_id: number;
   message?: {
@@ -46,6 +55,7 @@ export class Telegram {
   private closing = false;
   private flushWork: Promise<void> | undefined;
   private receives = new Map<number, Promise<unknown>>();
+  private credentialBinding: string;
   constructor(
     private app: Runtime,
     private transport: TelegramTransport,
@@ -55,6 +65,10 @@ export class Telegram {
     private privateDm = false,
     private botId?: number,
   ) {
+    const credential = this.app.store.get<{ value: string }>(
+      "SELECT value FROM credentials WHERE provider='telegram:bot'",
+    );
+    this.credentialBinding = hash(credential?.value ?? "");
     this.botUsername = botUsername?.trim().replace(/^@/, "") || undefined;
     if (this.botUsername && !/^[a-zA-Z0-9_]{5,32}$/.test(this.botUsername))
       throw new Error("TELEGRAM_BOT_USERNAME deve ser o username do bot");
@@ -64,11 +78,102 @@ export class Telegram {
     if (!start.startsWith("/") || start.startsWith("//")) return raw;
     const text = raw.trim();
     const addressed = /^\/[a-z]+@([a-z0-9_]+)(?=\s|$)/i.exec(text);
-    if (!addressed) return text;
+    if (!addressed) return this.newAlias(text);
     // Never execute a command intended for another bot or guess our identity.
     if (addressed[1].toLowerCase() !== this.botUsername?.toLowerCase())
       return undefined;
-    return text.replace(/^(\/[a-z]+)@[a-z0-9_]+/i, "$1");
+    return this.newAlias(text.replace(/^(\/[a-z]+)@[a-z0-9_]+/i, "$1"));
+  }
+  private newAlias(text: string) {
+    const match = /^\/new(?:\s+([\s\S]*))?$/.exec(text);
+    return match
+      ? `/chats new${match[1]?.trim() ? ` ${match[1].trim()}` : ""}`
+      : text;
+  }
+  /** Control replies identify the configured private owner, never grant history access. */
+  private controlRoute(owner: TelegramOwner): ControlRoute | undefined {
+    if (
+      !this.privateDm ||
+      !this.botId ||
+      !this.users.includes(owner.user) ||
+      !this.chats.includes(owner.chat)
+    )
+      return;
+    const saved = this.app.store.get<{ value: string }>(
+      "SELECT value FROM meta WHERE key='telegram:connection'",
+    );
+    if (!saved) return;
+    try {
+      const config = JSON.parse(saved.value);
+      if (
+        config.enabled !== true ||
+        config.bot?.id !== this.botId ||
+        config.userId !== owner.user ||
+        config.chatId !== owner.chat
+      )
+        return;
+      const credential = this.app.store.get<{ value: string }>(
+        "SELECT value FROM credentials WHERE provider='telegram:bot'",
+      );
+      if (!credential) return;
+      const identity = JSON.parse(credential.value);
+      if (
+        identity.botId !== this.botId ||
+        typeof identity.token !== "string" ||
+        !identity.token.trim()
+      )
+        return;
+      if (hash(credential?.value ?? "") !== this.credentialBinding) return;
+      return {
+        ...owner,
+        botId: this.botId,
+        credentialBinding: hash(credential?.value ?? ""),
+      };
+    } catch {
+      return;
+    }
+  }
+  private recoveryReply(
+    updateId: number,
+    fingerprint: string,
+    route: ControlRoute,
+    text: string,
+  ) {
+    const current = this.controlRoute(route);
+    if (!current || JSON.stringify(current) !== JSON.stringify(route))
+      return { ignored: true };
+    const result = { error: text, control: true };
+    const prefix = `telegram:control:${updateId}`;
+    this.app.store.db.exec("SAVEPOINT telegram_control_reply");
+    try {
+      this.app.store.queueTelegram(prefix, route.chat, text);
+      for (const part of this.app.store.all<{ id: string }>(
+        "SELECT id FROM deliveries WHERE substr(id,1,?)=?",
+        prefix.length + 1,
+        `${prefix}:`,
+      ))
+        this.app.store.run(
+          "INSERT OR IGNORE INTO meta VALUES (?,?)",
+          `telegram:control-route:${part.id}`,
+          JSON.stringify(route),
+        );
+      this.app.store.run(
+        "INSERT OR IGNORE INTO meta VALUES (?,?)",
+        `telegram:update:${updateId}`,
+        JSON.stringify(result),
+      );
+      this.app.store.run(
+        "INSERT OR IGNORE INTO telegram_updates VALUES (?,?)",
+        updateId,
+        fingerprint,
+      );
+      this.app.store.db.exec("RELEASE SAVEPOINT telegram_control_reply");
+      return result;
+    } catch (error) {
+      this.app.store.db.exec("ROLLBACK TO SAVEPOINT telegram_control_reply");
+      this.app.store.db.exec("RELEASE SAVEPOINT telegram_control_reply");
+      throw error;
+    }
   }
   async receive(update: TelegramUpdate, signal?: AbortSignal) {
     const message = update.message;
@@ -89,6 +194,8 @@ export class Telegram {
       (this.privateDm && message.chat.type !== "private")
     )
       return { ignored: true };
+    if (this.privateDm && !this.controlRoute({ chat, user }))
+      return { ignored: true };
     const text = this.commandText(message.text);
     if (text === undefined) return { ignored: true };
     const fingerprint = hash(JSON.stringify([user, chat, message.text]));
@@ -106,7 +213,8 @@ export class Telegram {
     );
     if (
       !/^\/(link|start)(?:\s|$)/.test(text) &&
-      (!linked || linked.user !== user)
+      (!linked || linked.user !== user) &&
+      !this.controlRoute({ chat, user })
     )
       throw new TelegramInputError(
         "Conversa não vinculada a este usuário; use /link CODIGO pela web",
@@ -174,6 +282,18 @@ export class Telegram {
     let errorReply: string | undefined;
     const pairing = /^\/(link|start)(?:\s+([\s\S]*))?$/.exec(text);
     if (pairing?.[1] === "start" && !pairing[2]) {
+      const control = this.controlRoute({ chat, user });
+      try {
+        this.app.telegramChats.binding({ chat, user });
+      } catch {
+        if (control)
+          return this.recoveryReply(
+            update.update_id,
+            fingerprint,
+            control,
+            TELEGRAM_RELINK_GUIDANCE,
+          );
+      }
       errorReply =
         linked?.user === user
           ? this.privateDm
@@ -205,11 +325,31 @@ export class Telegram {
       response = { linked: conversationId };
       // Re-link command is durably marked in the same synchronous turn as code consumption.
     } else {
-      if (!linked || linked.user !== user)
+      const control = this.controlRoute({ chat, user });
+      if (!linked || linked.user !== user) {
+        if (control)
+          return this.recoveryReply(
+            update.update_id,
+            fingerprint,
+            control,
+            TELEGRAM_RELINK_GUIDANCE,
+          );
         throw new TelegramInputError(
           "Vincule esta conversa na interface web com /link CODIGO",
         );
-      this.app.telegramChats.binding({ chat, user });
+      }
+      try {
+        this.app.telegramChats.binding({ chat, user });
+      } catch (error) {
+        if (control)
+          return this.recoveryReply(
+            update.update_id,
+            fingerprint,
+            control,
+            TELEGRAM_RELINK_GUIDANCE,
+          );
+        throw error;
+      }
       const selected = this.app.store.get<{ conversationId: string }>(
         "SELECT conversationId FROM telegram_chat_selection WHERE chat=? AND user=?",
         chat,
@@ -231,9 +371,20 @@ export class Telegram {
           `telegram:${update.update_id}`,
           chat,
         );
-        conversationId =
-          prior?.conversationId ??
-          this.app.telegramChats.selected({ chat, user });
+        try {
+          conversationId =
+            prior?.conversationId ??
+            this.app.telegramChats.selected({ chat, user });
+        } catch (error) {
+          if (control)
+            return this.recoveryReply(
+              update.update_id,
+              fingerprint,
+              control,
+              TELEGRAM_SELECTION_GUIDANCE,
+            );
+          throw error;
+        }
         if (!conversationId) {
           // Migrate normal messages on first use; command-only operations retain
           // access to the old binding until a dedicated conversation exists.
@@ -356,14 +507,35 @@ export class Telegram {
       "SELECT * FROM deliveries WHERE state='pending' ORDER BY rowid",
     )) {
       if (this.closing) break;
+      const control = this.app.store.get<{ value: string }>(
+        "SELECT value FROM meta WHERE key=?",
+        `telegram:control-route:${delivery.id}`,
+      );
+      let authorizedControl = false;
+      if (control) {
+        try {
+          const route = JSON.parse(control.value) as ControlRoute;
+          const current = this.controlRoute(route);
+          authorizedControl =
+            !!current &&
+            current.chat === delivery.chat &&
+            JSON.stringify(current) === JSON.stringify(route);
+        } catch {
+          /* Malformed control receipts never authorize a send. */
+        }
+      }
+      // Revoked owned receipts are terminal even when this engine now serves
+      // another chat. Unowned legacy rows outside its allowlist stay untouched.
       if (
-        !taskTelegramAuthorized(
-          this.app.store,
-          delivery.id,
-          this.users,
-          this.chats,
-          this.botId,
-        )
+        control
+          ? !authorizedControl
+          : !taskTelegramAuthorized(
+              this.app.store,
+              delivery.id,
+              this.users,
+              this.chats,
+              this.botId,
+            )
       ) {
         this.app.store.run(
           "UPDATE deliveries SET state='cancelled',result=? WHERE id=? AND state='pending'",
@@ -373,6 +545,27 @@ export class Telegram {
         continue;
       }
       if (this.privateDm && !this.chats.includes(delivery.chat)) continue;
+      let bindingAvailable = !this.privateDm;
+      if (this.privateDm) {
+        for (const user of this.users) {
+          if (!this.controlRoute({ chat: delivery.chat, user })) continue;
+          try {
+            this.app.telegramChats.binding({ chat: delivery.chat, user });
+            bindingAvailable = true;
+            break;
+          } catch {
+            /* Only new, owner-scoped guidance can bypass a missing history binding. */
+          }
+        }
+      }
+      if (!control && !bindingAvailable) {
+        this.app.store.run(
+          "UPDATE deliveries SET state='cancelled',result=? WHERE id=? AND state='pending'",
+          "Vínculo Telegram revogado antes do envio.",
+          delivery.id,
+        );
+        continue;
+      }
       const changed = this.app.store.run(
         "UPDATE deliveries SET state='sending' WHERE id=? AND state='pending'",
         delivery.id,

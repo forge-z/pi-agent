@@ -1,7 +1,16 @@
-node_modules/
+# Local dependencies (also ignores a symlinked node_modules entry).
+node_modules
 dist/
 data/
 .env
+.env.*
+!.env.example
 secrets/*
 !secrets/.gitkeep
 *.sqlite*
+
+# Private key and certificate bundle files belong in a secret store.
+*.pem
+*.key
+*.p12
+*.pfx

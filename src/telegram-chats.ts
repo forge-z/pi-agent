@@ -5,6 +5,10 @@ export interface TelegramOwner {
   chat: string;
   user: string;
 }
+export const TELEGRAM_RELINK_GUIDANCE =
+  "O bot continua configurado, mas o vínculo da conversa foi excluído ou revogado. Crie uma nova conversa na web, escolha Vincular Telegram e envie /link CODIGO aqui. Depois use /new ou /chats new TÍTULO. Nenhum histórico ou vínculo antigo será reativado.";
+export const TELEGRAM_SELECTION_GUIDANCE =
+  "A conversa Telegram selecionada foi excluída ou perdeu a autorização. Use /new ou /chats new TÍTULO para criar outra, ou /chats ID para selecionar uma conversa disponível.";
 
 /** A dedicated selection is independent of the legacy web/cron binding. */
 export class TelegramChats {

@@ -64,11 +64,18 @@ function composer() {
     new URL("../public/tools.js", import.meta.url),
     "utf8",
   );
+  const eventsSource = readFileSync(
+    new URL("../public/conversation-events.js", import.meta.url),
+    "utf8",
+  );
   // Load the real application handlers, substituting only the browser environment.
   runInNewContext(
     "const { attachToolVisibility, attachToolBody, createToolCalls, toolResultNeedsAttention } = (() => {" +
       toolsSource.replace(/^export /gm, "") +
       "\nreturn { attachToolVisibility, attachToolBody, createToolCalls, toolResultNeedsAttention }; })();" +
+      "\nconst { attachConversationEvents } = (() => {" +
+      eventsSource.replace(/^export /gm, "") +
+      "\nreturn { attachConversationEvents }; })();" +
       "\n" +
       source.replace(/^import[\s\S]*?;\s*/gm, "") +
       '\nconversationId = "2";',

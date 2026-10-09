@@ -227,7 +227,70 @@ test("archive revokes an unpaired Telegram setup across restore until an explici
   }
 });
 
-test("archive suppresses bound Telegram ingress while an explicit new link remains usable", async () => {
+test("revoked unpaired setup never bootstraps its old grant for invalid or valid link commands", async () => {
+  const f = await fixture();
+  try {
+    const old = await f.app.create("Sem primeiro DM");
+    await f.connect(old);
+    await f.app.deleteConversation(old);
+    f.fake.push(dm(9301, `/link ${"f".repeat(32)}`));
+    await until(() => f.offset() === "9302");
+    assert.equal(f.app.store.all("SELECT * FROM telegram").length, 0);
+    assert.equal(f.app.store.all("SELECT * FROM telegram_grants").length, 0);
+    const fresh = await f.app.create("Precisa nova conexão explícita");
+    f.fake.push(dm(9302, `/link ${f.app.store.link(fresh)}`));
+    await until(() => f.offset() === "9303");
+    assert.equal(f.app.store.all("SELECT * FROM telegram").length, 0);
+    assert.equal(f.app.store.all("SELECT * FROM telegram_grants").length, 0);
+  } finally {
+    await f.close();
+  }
+});
+
+test("configured Telegram owner receives new/relink guidance after deleting every conversation and can explicitly link a fresh web anchor", async () => {
+  const f = await fixture();
+  try {
+    const anchor = await f.app.create("Web anchor");
+    await f.connect(anchor);
+    f.fake.push(dm(9201, "/new Trabalho"));
+    await until(() => f.offset() === "9202");
+    const selected = f.app.store.get<{ conversationId: string }>(
+      "SELECT conversationId FROM telegram_chat_selection WHERE chat='42' AND user='42'",
+    )?.conversationId;
+    assert.ok(selected);
+    await f.app.deleteConversation(selected);
+    await f.app.deleteConversation(anchor);
+    const before = f.fake.sent.length;
+    f.fake.push(dm(9202, "/new"));
+    await until(() => f.offset() === "9203");
+    await until(() => f.fake.sent.length > before);
+    assert.match(String(f.fake.sent.at(-1)?.text), /Vincular Telegram/);
+    assert.equal(f.app.store.all("SELECT * FROM telegram_grants").length, 0);
+    await f.restart();
+    f.fake.push(dm(9203, "E agora?"));
+    await until(() => f.offset() === "9204");
+    assert.match(String(f.fake.sent.at(-1)?.text), /Vincular Telegram/);
+    const fresh = await f.app.create("Novo vínculo explícito");
+    f.fake.push(dm(9204, `/link ${f.app.store.link(fresh)}`));
+    await until(() => f.offset() === "9205");
+    f.fake.push(dm(9205, "/new Depois do vínculo"));
+    await until(() => f.offset() === "9206");
+    assert.equal(
+      f.app.store.get<{ conversationId: string }>(
+        "SELECT conversationId FROM telegram WHERE chat='42'",
+      )?.conversationId,
+      fresh,
+    );
+    const newSelected = f.app.store.get<{ conversationId: string }>(
+      "SELECT conversationId FROM telegram_chat_selection WHERE chat='42' AND user='42'",
+    )?.conversationId;
+    assert.ok(newSelected && newSelected !== selected);
+  } finally {
+    await f.close();
+  }
+});
+
+test("archive suppresses old history while guiding the bound owner and preserving explicit new links", async () => {
   const f = await fixture();
   try {
     const id = await f.app.create("Vinculada");
@@ -245,11 +308,24 @@ test("archive suppresses bound Telegram ingress while an explicit new link remai
     const before = f.app.store.all("SELECT * FROM deliveries").length;
     f.fake.push(dm(9102, "/help"));
     await until(() => f.offset() === "9103");
-    assert.equal(f.app.store.all("SELECT * FROM deliveries").length, before);
+    assert.equal(
+      f.app.store.all("SELECT * FROM deliveries").length,
+      before + 1,
+    );
+    assert.match(
+      f.app.store.get<{ text: string }>(
+        "SELECT text FROM deliveries WHERE id='telegram:control:9102:0'",
+      )!.text,
+      /Vincular Telegram/,
+    );
     f.app.restoreConversation(id);
     f.fake.push(dm(9103, "Ainda não vincular automaticamente"));
     await until(() => f.offset() === "9104");
-    assert.equal(f.app.store.all("SELECT * FROM deliveries").length, before);
+    assert.equal(
+      f.app.store.all("SELECT * FROM deliveries").length,
+      before + 2,
+    );
+    assert.equal(f.app.store.all("SELECT * FROM requests").length, 0);
     const code = f.app.store.link(other);
     f.fake.push(dm(9104, `/link ${code}`));
     await until(() => f.offset() === "9105");
@@ -972,6 +1048,7 @@ test("native command menu uses only the confirmed private chat, preserves global
     assert.deepEqual(
       telegramCommandCatalog.map((c) => c.command),
       [
+        "new",
         "chats",
         "agents",
         "model",

@@ -92,6 +92,10 @@ export function createAppServer(app: Runtime, options: ServerOptions) {
   const tasks = app.tasks;
   tasks.start();
   const streams = new Set<ServerResponse>();
+  const conversationListVersion = () =>
+    hash(
+      JSON.stringify([app.listConversations(), app.listConversations(true)]),
+    );
   const attempts = new Map<string, { count: number; until: number }>();
   const timer = options.telegram
     ? setInterval(
@@ -182,6 +186,62 @@ export function createAppServer(app: Runtime, options: ServerOptions) {
       }
       if (path.startsWith("/api/")) {
         if (!authenticated) throw new HttpError(401, "Faça login na interface");
+        if (path === "/api/conversations/events" && method === "GET") {
+          response.writeHead(200, {
+            "content-type": "text/event-stream; charset=utf-8",
+            "cache-control": "no-cache, no-transform",
+            connection: "keep-alive",
+            "x-accel-buffering": "no",
+          });
+          streams.add(response);
+          response.write("retry: 1500\n\n");
+          let closed = false;
+          let previousVersion: string | undefined;
+          const send = () => {
+            if (closed) return;
+            try {
+              if (
+                !app.store.get(
+                  "SELECT token FROM sessions WHERE token=? AND expires>?",
+                  owner,
+                  Date.now(),
+                )
+              ) {
+                response.end();
+                return;
+              }
+              if (
+                response.writableNeedDrain ||
+                response.writableLength > 262144
+              )
+                return;
+              // Only list metadata is polled. A chat created on another transport
+              // must not depend on a change to the selected transcript watcher.
+              const version = conversationListVersion();
+              if (version !== previousVersion) {
+                response.write(
+                  `event: conversations\ndata: ${JSON.stringify({ version })}\n\n`,
+                );
+                previousVersion = version;
+              }
+            } catch {
+              response.end();
+            }
+          };
+          const poll = setInterval(send, 1000);
+          const ping = setInterval(() => {
+            if (response.writableLength > 1048576) response.end();
+            else if (!response.writableNeedDrain) response.write(": ping\n\n");
+          }, 15000);
+          response.on("close", () => {
+            closed = true;
+            clearInterval(poll);
+            clearInterval(ping);
+            streams.delete(response);
+          });
+          send();
+          return;
+        }
         if (path === "/api/telegram" && method === "GET")
           return json(response, 200, telegramConnection.snapshot());
         if (path === "/api/telegram/connect" && method === "POST")
@@ -537,10 +597,39 @@ export function createAppServer(app: Runtime, options: ServerOptions) {
             let sending = false;
             let closed = false;
             let lastSnapshotHash: string | undefined;
+            let lastListVersion: string | undefined;
             const detach = await app.watch(id, () => {
               dirty = true;
             });
             const send = async () => {
+              if (
+                !closed &&
+                !response.writableNeedDrain &&
+                response.writableLength <= 262144
+              ) {
+                try {
+                  if (
+                    !app.store.get(
+                      "SELECT token FROM sessions WHERE token=? AND expires>?",
+                      owner,
+                      Date.now(),
+                    )
+                  ) {
+                    response.end();
+                    return;
+                  }
+                  const version = conversationListVersion();
+                  if (version !== lastListVersion) {
+                    response.write(
+                      `event: conversations\ndata: ${JSON.stringify({ version })}\n\n`,
+                    );
+                    lastListVersion = version;
+                  }
+                } catch {
+                  response.end();
+                  return;
+                }
+              }
               if (
                 !dirty ||
                 sending ||
@@ -610,6 +699,10 @@ export function createAppServer(app: Runtime, options: ServerOptions) {
         "/app.js": ["app.js", "text/javascript"],
         "/commands.js": ["commands.js", "text/javascript"],
         "/conversations.js": ["conversations.js", "text/javascript"],
+        "/conversation-events.js": [
+          "conversation-events.js",
+          "text/javascript",
+        ],
         "/markdown.js": ["markdown.js", "text/javascript"],
         "/marked.js": [
           fileURLToPath(import.meta.resolve("marked")),

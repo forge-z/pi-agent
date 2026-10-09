@@ -707,11 +707,6 @@ export class TelegramConnection {
         config.chatId,
         config.userId,
       );
-    const explicitLink =
-      typeof message?.text === "string" &&
-      /^\/(link|start)(?:@[a-zA-Z0-9_]+)?\s+[a-f0-9]{32}\s*$/.test(
-        message.text.trim(),
-      );
     let state = "ignored";
     if (
       message?.chat?.type === "private" &&
@@ -722,7 +717,10 @@ export class TelegramConnection {
       message.text.trim() &&
       Number.isSafeInteger(message.chat.id) &&
       message.chat.id > 0 &&
-      (!initialRevoked || activeMapping || (config.chatId && explicitLink))
+      // The configured private owner may receive control guidance after a
+      // revoked history binding. The engine still authorizes every history
+      // admission and outbox send; this never regrants an old conversation.
+      (!initialRevoked || activeMapping || config.chatId)
     ) {
       const chat = String(message.chat.id);
       const languageCode = /^([a-z]{2})(?:[-_]|$)/i

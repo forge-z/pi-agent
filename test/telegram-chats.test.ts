@@ -55,6 +55,10 @@ async function fixture() {
       conversationId: webId,
     }),
   );
+  app.store.run(
+    "INSERT INTO credentials VALUES ('telegram:bot',?)",
+    JSON.stringify({ token: "123:fake-telegram-chats-local", botId: 123 }),
+  );
   const engine = () =>
     new Telegram(
       app,
@@ -86,6 +90,76 @@ function idOf(value: unknown) {
   return (value as { conversationId: string }).conversationId;
 }
 
+test("a manual Telegram selection racing automatic creation keeps every origin visible in the web sidebar", async () => {
+  const f = await fixture();
+  let release!: () => void;
+  try {
+    const owner = { chat: "100", user: "42" };
+    const chosenId = await f.app.create("Explicitly selected", owner);
+    const create = f.app.create.bind(f.app);
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let entered!: (id: string) => void;
+    const created = new Promise<string>((resolve) => {
+      entered = resolve;
+    });
+    f.app.create = async (...args) => {
+      const id = await create(...args);
+      if (args[0] === "Conversa Telegram") {
+        entered(id);
+        await gate;
+      }
+      return id;
+    };
+    const migration = f.engine().receive(update(90, "Racing Telegram input"));
+    const automaticId = await created;
+    await f.engine().receive(update(91, `/chats ${chosenId}`));
+    release();
+    assert.equal(idOf(await migration), chosenId);
+    await (await f.app.conversation(chosenId)).waitForIdle(context);
+    assert.deepEqual(
+      f.app.listConversations().map(({ id, channel, telegramLinked }) => ({
+        id,
+        channel,
+        telegramLinked,
+      })),
+      [
+        { id: automaticId, channel: "telegram", telegramLinked: true },
+        { id: chosenId, channel: "telegram", telegramLinked: true },
+        { id: f.webId, channel: "web", telegramLinked: false },
+      ],
+    );
+    assert.equal(
+      f.app.store.get<{ conversationId: string }>(
+        "SELECT conversationId FROM telegram_chat_selection WHERE chat='100' AND user='42'",
+      )?.conversationId,
+      chosenId,
+    );
+    assert.equal(
+      f.app.store.get<{ conversationId: string }>(
+        "SELECT conversationId FROM telegram WHERE chat='100'",
+      )?.conversationId,
+      f.webId,
+    );
+    assert.equal(
+      f.app.store.get(
+        "SELECT 1 FROM requests WHERE conversationId=?",
+        automaticId,
+      ),
+      undefined,
+    );
+    assert.ok(
+      (await f.app.snapshot(chosenId)).view.entries.some(
+        (entry) => entry.kind === "pi.user",
+      ),
+    );
+  } finally {
+    release?.();
+    await f.close();
+  }
+});
+
 test("the next Telegram message automatically gets separate context without moving web history or cron binding", async () => {
   const f = await fixture();
   try {
@@ -107,7 +181,24 @@ test("the next Telegram message automatically gets separate context without movi
     );
     assert.deepEqual(
       f.app.listConversations().map((c) => c.id),
-      [f.webId],
+      [id, f.webId],
+    );
+    assert.equal(
+      f.app.listConversations().find((row) => row.id === id)?.channel,
+      "telegram",
+    );
+    assert.equal(
+      f.app.listConversations().find((row) => row.id === id)?.telegramLinked,
+      true,
+    );
+    assert.equal(
+      f.app.listConversations().find((row) => row.id === f.webId)?.channel,
+      "web",
+    );
+    assert.equal(
+      f.app.listConversations().find((row) => row.id === f.webId)
+        ?.telegramLinked,
+      false,
     );
     assert.equal(
       f.app.store.all("SELECT * FROM telegram_conversations").length,
@@ -143,6 +234,16 @@ test("/chats creates, lists and switches scoped chats; retries and restart never
     const secondId = idOf(second);
     assert.notEqual(firstId, secondId);
     assert.deepEqual(
+      f.app
+        .listConversations()
+        .map((row) => ({ id: row.id, channel: row.channel })),
+      [
+        { id: secondId, channel: "telegram" },
+        { id: firstId, channel: "telegram" },
+        { id: f.webId, channel: "web" },
+      ],
+    );
+    assert.deepEqual(
       await f.engine().receive(update(10, "/chats new Viagem pessoal")),
       first,
     );
@@ -158,6 +259,10 @@ test("/chats creates, lists and switches scoped chats; retries and restart never
     assert.match(listing.text, /web/);
     await f.engine().receive(update(14, `/chats ${firstId}`));
     await f.restart();
+    assert.deepEqual(
+      f.app.listConversations().map((row) => row.id),
+      [secondId, firstId, f.webId],
+    );
     assert.deepEqual(
       await f.engine().receive(update(11, "/chats new Trabalho")),
       second,
@@ -265,9 +370,10 @@ test("revoked binding/selection fails closed rather than returning to mixed hist
       "DELETE FROM telegram_grants WHERE conversationId=?",
       f.webId,
     );
-    await assert.rejects(
-      f.engine().receive(update(31, "must fail")),
-      /não autorizada/,
+    assert.match(
+      ((await f.engine().receive(update(31, "must fail"))) as { error: string })
+        .error,
+      /Vincular Telegram/,
     );
     f.app.store.run(
       "INSERT INTO telegram_grants VALUES (?,?,?)",
@@ -276,18 +382,26 @@ test("revoked binding/selection fails closed rather than returning to mixed hist
       f.webId,
     );
     f.app.store.run("DELETE FROM telegram_grants WHERE conversationId=?", id);
-    await assert.rejects(
-      f.engine().receive(update(32, "must also fail")),
-      /não autorizada/,
+    assert.match(
+      (
+        (await f.engine().receive(update(32, "must also fail"))) as {
+          error: string;
+        }
+      ).error,
+      /\/new/,
     );
     assert.equal(
       f.app.store.all("SELECT * FROM requests WHERE text LIKE 'must%'").length,
       0,
     );
     await f.restart();
-    await assert.rejects(
-      f.engine().receive(update(33, "still revoked")),
-      /não autorizada/,
+    assert.match(
+      (
+        (await f.engine().receive(update(33, "still revoked"))) as {
+          error: string;
+        }
+      ).error,
+      /\/new/,
     );
     assert.equal(
       f.app.store.all("SELECT * FROM telegram_conversations").length,

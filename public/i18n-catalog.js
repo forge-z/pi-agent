@@ -222,6 +222,7 @@ globalThis.PiEnglish = {
   Conectar: "Connect",
   Desconectar: "Disconnect",
   "Abrir bot no Telegram": "Open bot in Telegram",
+  "Conversa Telegram": "Telegram conversation",
   "Tentar novamente": "Try again",
   "Atualizar status": "Refresh status",
   "WEBHOOK JÁ CONFIGURADO": "WEBHOOK ALREADY CONFIGURED",

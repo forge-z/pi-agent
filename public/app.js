@@ -23,6 +23,7 @@ import { renderCuaHandoffs } from "/cua-handoffs.js";
 import { renderMarkdown, renderTextPreview } from "/markdown.js";
 import { historyWindow } from "/history.js";
 import { attachConversationManagementUI } from "/conversations.js";
+import { attachConversationEvents } from "/conversation-events.js";
 import {
   canDispatchCommandResult,
   createSlashAutocomplete,
@@ -42,6 +43,7 @@ const toolVisibility = attachToolVisibility({
   messages: $("messages"),
 });
 let conversationId = null;
+let conversationSelectionVersion = 0;
 let events = null;
 let providerFlow = null;
 let providerPoll = null;
@@ -52,6 +54,13 @@ let sendRefreshVersion = 0;
 let conversationsLoadVersion = 0;
 let conversationsCache = [];
 let conversationManagementUI = null;
+const conversationEvents = attachConversationEvents({
+  refresh: async (active) => {
+    await loadConversations();
+    if (active()) await conversationManagementUI?.refreshDeletedView();
+  },
+  report,
+});
 const mobile = window.matchMedia("(max-width: 760px)");
 function icon(name) {
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -143,9 +152,12 @@ async function api(path, method = "GET", data) {
   return result;
 }
 function showLogin() {
+  conversationSelectionVersion++;
   sendRefreshVersion++;
   conversationsLoadVersion++;
   events?.close();
+  conversationEvents.stop();
+  conversationManagementUI?.reset();
   clearInterval(providerPoll);
   providerPoll = null;
   providerFlow = null;
@@ -707,8 +719,10 @@ async function create() {
   await select(conversation.id, "Nova conversa");
 }
 async function select(id, title) {
+  const selectionVersion = ++conversationSelectionVersion;
   sendRefreshVersion++;
   events?.close();
+  conversationEvents.stop();
   pendingMessage = JSON.parse(
     sessionStorage.getItem(`pending:${id}`) || "null",
   );
@@ -728,20 +742,38 @@ async function select(id, title) {
   plain($("conversation-title"), title);
   history.replaceState(null, "", `?c=${encodeURIComponent(id)}`);
   await loadConversations();
+  if (selectionVersion !== conversationSelectionVersion) return;
   const snapshot = await api(`/api/conversations/${id}`);
-  if (id !== conversationId) return;
+  if (
+    selectionVersion !== conversationSelectionVersion ||
+    id !== conversationId
+  )
+    return;
   render(snapshot);
   events = new EventSource(`/api/conversations/${id}/events`);
+  conversationEvents.start(events);
   events.addEventListener("snapshot", (event) => {
-    if (id === conversationId) render(JSON.parse(event.data));
+    if (
+      selectionVersion === conversationSelectionVersion &&
+      id === conversationId
+    )
+      render(JSON.parse(event.data));
   });
   events.onopen = () => {
-    if (id !== conversationId) return;
+    if (
+      selectionVersion !== conversationSelectionVersion ||
+      id !== conversationId
+    )
+      return;
     text($("connection"), () => t("Sincronizado"));
     $("connection").dataset.state = "connected";
   };
   events.onerror = () => {
-    if (id !== conversationId) return;
+    if (
+      selectionVersion !== conversationSelectionVersion ||
+      id !== conversationId
+    )
+      return;
     text($("connection"), () => t("Reconectando…"));
     $("connection").dataset.state = "reconnecting";
   };
@@ -1641,6 +1673,8 @@ conversationManagementUI = attachConversationManagementUI(api, {
     }
     events?.close();
     events = null;
+    conversationSelectionVersion++;
+    conversationEvents.stop();
     conversationId = null;
     pendingMessage = null;
     clearCommandPolls();

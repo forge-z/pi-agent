@@ -15,12 +15,16 @@ export interface TelegramCommandMenuStatus {
     "waiting" | "syncing" | "ready" | "retrying" | "conflict" | "uncertain";
   message: string;
 }
-export const telegramCommandCatalog = commandCatalog.map(
-  ({ name, description }) => ({
+export const telegramCommandCatalog = [
+  {
+    command: "new",
+    description: "Criar e selecionar uma nova conversa Telegram",
+  },
+  ...commandCatalog.map(({ name, description }) => ({
     command: name,
     description,
-  }),
-);
+  })),
+];
 const same = (a: BotCommand[], b: BotCommand[]) =>
   JSON.stringify(a) === JSON.stringify(b);
 
