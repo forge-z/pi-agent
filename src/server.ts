@@ -16,6 +16,7 @@ import { TaskError } from "./tasks.js";
 import { SettingsError } from "./settings.js";
 import { commandCatalog, CommandError } from "./commands.js";
 import { PolicyError, McpError } from "./mcp.js";
+import { CuaHandoffError } from "./cua-handoffs.js";
 import {
   TelegramConnection,
   TelegramSetupError,
@@ -350,6 +351,24 @@ export function createAppServer(app: Runtime, options: ServerOptions) {
             return json(response, 200, { ok: true });
           }
         }
+        const handoffRoute =
+          /^\/api\/conversations\/([0-9]+)\/cua-handoffs\/([a-f0-9-]+)\/(create|end)$/.exec(
+            path,
+          );
+        if (handoffRoute && method === "POST") {
+          const [, id, handoffId, operation] = handoffRoute;
+          await app.conversation(id);
+          if (!app.cuaHandoffs)
+            throw new HttpError(400, "Viewer CUA indisponível neste ambiente.");
+          const input = await body(request);
+          return json(
+            response,
+            200,
+            operation === "create"
+              ? await app.cuaHandoffs.create(id, handoffId)
+              : app.cuaHandoffs.end(id, handoffId, input),
+          );
+        }
         const interactionRoute =
           /^\/api\/conversations\/([0-9]+)\/mcp-interactions\/([a-f0-9-]+)$/.exec(
             path,
@@ -587,6 +606,7 @@ export function createAppServer(app: Runtime, options: ServerOptions) {
         "/settings.js": ["settings.js", "text/javascript"],
         "/telegram.js": ["telegram.js", "text/javascript"],
         "/tools.js": ["tools.js", "text/javascript"],
+        "/cua-handoffs.js": ["cua-handoffs.js", "text/javascript"],
         "/history.js": ["history.js", "text/javascript"],
         "/style.css": ["style.css", "text/css"],
         "/manifest.webmanifest": [
@@ -648,6 +668,7 @@ export function createAppServer(app: Runtime, options: ServerOptions) {
           error instanceof ConversationError ||
           error instanceof PolicyError ||
           error instanceof McpError ||
+          error instanceof CuaHandoffError ||
           error instanceof TelegramSetupError
             ? error.message
             : "Não foi possível processar a operação",

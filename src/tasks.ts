@@ -41,7 +41,8 @@ type PendingRun = TaskRun & {
 type TaskRuntime = Pick<
   Runtime,
   "store" | "create" | "conversation" | "submit"
->;
+> &
+  Partial<Pick<Runtime, "isConversationHeld">>;
 
 function text(value: unknown, field: string, limit: number) {
   if (typeof value !== "string" || !value.trim() || value.length > limit)
@@ -436,7 +437,8 @@ export class Tasks {
         "SELECT * FROM tasks WHERE deleted=0 AND enabled=1 AND nextRun<=? AND conversationId NOT IN (SELECT conversationId FROM conversation_lifecycle WHERE deletedAt IS NOT NULL) ORDER BY nextRun",
         now,
       ))
-        this.claim(task.id, now, true);
+        if (!this.runtime.isConversationHeld?.(task.conversationId))
+          this.claim(task.id, now, true);
       await this.dispatch();
       this.refresh();
     }).finally(() => {

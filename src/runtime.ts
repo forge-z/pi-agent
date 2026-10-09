@@ -13,11 +13,15 @@ import {
   createRegistry,
   defineExtension,
   defineTool,
+  hook,
+  ToolTask,
   section,
   LiveDoc,
   type ConversationId,
   type ToolExecutionApi,
   type Registry,
+  type Submission,
+  type SubmissionId,
 } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import lockfile from "proper-lockfile";
@@ -36,6 +40,7 @@ import {
   type McpCatalog,
 } from "./mcp.js";
 import { McpCalls, type McpCall } from "./mcp-calls.js";
+import { CuaHandoffs, type CuaViewerFactory } from "./cua-handoffs.js";
 import { Settings, SettingsError } from "./settings.js";
 import { Tasks, TaskError } from "./tasks.js";
 import { queueTaskTelegram } from "./task-telegram.js";
@@ -53,6 +58,7 @@ export interface RuntimeOptions {
   mode?: "demo" | "live";
   modelId?: string;
   provider?: string;
+  cuaViewerFactory?: CuaViewerFactory;
 }
 export class ConversationError extends Error {
   constructor(
@@ -63,8 +69,8 @@ export class ConversationError extends Error {
   }
 }
 export class ConversationBusyError extends ConversationError {
-  constructor() {
-    super("Conversa em atualização. Tente novamente.", 409);
+  constructor(message = "Conversa em atualização. Tente novamente.") {
+    super(message, 409);
   }
 }
 function conversationTitle(value: unknown) {
@@ -88,6 +94,7 @@ export class Runtime {
   readonly commands: Commands;
   harness!: Harness;
   mcpCalls!: McpCalls;
+  cuaHandoffs?: CuaHandoffs;
   mcpStatus: McpCatalog[] = [];
   private registry!: Registry;
   private release!: () => Promise<void>;
@@ -102,6 +109,7 @@ export class Runtime {
   >();
   private closing = false;
   private conversationChanges = new Set<string>();
+  private guardedTools = new WeakSet<object>();
   private constructor(readonly options: RuntimeOptions) {
     this.store = new Store(options.dir);
     this.actions = new Actions(this.store, options.gateway);
@@ -166,8 +174,30 @@ export class Runtime {
     this.settings = new Settings(this);
     this.tasks = new Tasks(this);
     this.commands = new Commands(this);
-    if (options.gateway instanceof McpGateway)
+    if (options.gateway instanceof McpGateway) {
       this.mcpCalls = new McpCalls(this.store, options.gateway);
+      this.cuaHandoffs = new CuaHandoffs(
+        this.store,
+        options.gateway,
+        async (id) => {
+          const inspection = await this.harness.inspect(context);
+          return (
+            this.commands.busy(id) ||
+            this.conversationChanges.has(id) ||
+            inspection.tasks.some(
+              ({ record }) =>
+                String(record.conversationId) === id &&
+                record.state.status !== "terminal",
+            ) ||
+            !!this.store.get(
+              "SELECT 1 FROM requests WHERE conversationId=? AND status='pending'",
+              id,
+            )
+          );
+        },
+        options.cuaViewerFactory,
+      );
+    }
   }
   static async open(options: RuntimeOptions) {
     // Lock before SQLite recovery; another owner must never mark live effects uncertain.
@@ -194,6 +224,17 @@ export class Runtime {
       registry.install(
         defineExtension({
           name: "personal-assistant",
+          hooks: [
+            hook(ToolTask, {
+              beforeTool: (_call, api) =>
+                app!.cuaHandoffs?.holds(String(api.conversationId))
+                  ? {
+                      block:
+                        "Conversa pausada para intervenção humana CUA. Aguarde a devolução explícita do controle pela interface.",
+                    }
+                  : undefined,
+            }),
+          ],
           sections: [
             section(
               "scheduling",
@@ -383,14 +424,38 @@ export class Runtime {
       } while (cursor);
       for (const row of app.store.all<RequestRow>(
         "SELECT * FROM requests WHERE status='pending'",
-      ))
-        await app.submit(
-          row.conversationId,
-          row.requestId,
-          row.text,
-          row.source,
-          row.chat,
-        );
+      )) {
+        if (app.isConversationHeld(row.conversationId)) {
+          // Reattach only: never admit a previously unsent input while control is held.
+          const receipt = await app.harness.commit(
+            (tx) =>
+              tx.submissionByRequest(
+                Number(row.conversationId) as ConversationId,
+                row.requestId,
+              ),
+            context,
+          );
+          if (receipt) {
+            const submission = await app.harness.submission(
+              receipt.id as SubmissionId,
+              context,
+            );
+            if (submission)
+              app.monitorSubmission(
+                await app.conversation(row.conversationId),
+                submission,
+                row,
+              );
+          }
+        } else
+          await app.submit(
+            row.conversationId,
+            row.requestId,
+            row.text,
+            row.source,
+            row.chat,
+          );
+      }
       for (const action of app.store.all<Action>(
         "SELECT * FROM actions WHERE state IN ('done','failed','denied','uncertain','reconciled')",
       ))
@@ -413,6 +478,39 @@ export class Runtime {
   async refreshMcpTools() {
     if (!(this.options.gateway instanceof McpGateway)) return;
     this.mcpStatus = await this.options.gateway.catalog(true);
+    const viewers = this.options.gateway.config
+      .filter((item) => item.cuaViewer)
+      .map((item) => item.name);
+    this.registry.install(
+      defineExtension({
+        name: "cua-handoff",
+        tools: viewers.length
+          ? [
+              defineTool({
+                name: "cua_request_handoff",
+                description:
+                  "Request explicit human control of an opted-in CUA server. Automation pauses until the user creates a private viewer in the web interface and explicitly returns control. This tool never returns viewer access, URLs or credentials. Use only for an active human request, never scheduled or system messages.",
+                parameters: Type.Object({
+                  server: Type.Union(viewers.map((name) => Type.Literal(name))),
+                }),
+                replay: "unsafe",
+                executionMode: "sequential",
+                execute: async ({ server }, api) => {
+                  await this.requireHumanInput(api);
+                  const result = this.cuaHandoffs!.request(
+                    String(api.conversationId),
+                    Number(api.taskId),
+                    server,
+                  );
+                  return {
+                    content: [{ type: "text", text: JSON.stringify(result) }],
+                  };
+                },
+              }),
+            ]
+          : [],
+      }),
+    );
     this.registry.install(
       defineExtension({
         name: "mcp-direct",
@@ -476,6 +574,26 @@ export class Runtime {
         ),
       }),
     );
+    // Pi resumes replay-safe tools from their execute checkpoint without rerunning
+    // beforeTool. Guard executors too so a recovered owner tool cannot bypass a hold.
+    for (const extension of this.registry.snapshot().installed()) {
+      let changed = false;
+      const tools = extension.tools?.map((tool) => {
+        if (this.guardedTools.has(tool)) return tool;
+        changed = true;
+        const guarded = {
+          ...tool,
+          execute: (...args: Parameters<typeof tool.execute>) => {
+            this.assertHandoffAvailable(String(args[1].conversationId));
+            return tool.execute(...args);
+          },
+        };
+        this.guardedTools.add(guarded);
+        return guarded;
+      });
+      if (changed)
+        this.registry.install(defineExtension({ ...extension, tools }));
+    }
   }
   async create(title = "Nova conversa") {
     title = conversationTitle(title);
@@ -525,6 +643,7 @@ export class Runtime {
     ) => Promise<T>,
   ) {
     return this.withProviderAdmission(async () => {
+      this.assertHandoffAvailable(id);
       const conversation = await this.conversation(id);
       this.assertConversationAvailable(id);
       this.conversationChanges.add(id);
@@ -584,6 +703,7 @@ export class Runtime {
     return { id, title: row.title, deletedAt: null };
   }
   async deleteConversation(id: string) {
+    this.assertHandoffAvailable(id);
     this.assertConversationAvailable(id);
     if (
       [...this.admissions.keys()].some((key) => key.startsWith(`${id}:`)) ||
@@ -737,6 +857,7 @@ export class Runtime {
     text: string,
     access: CommandAccess,
   ) {
+    this.assertHandoffAvailable(conversationId);
     if (
       access.source === "web" &&
       /^\/(link|start)(?:@[a-zA-Z0-9_]+)?(?:\s|$)/.test(text.trim())
@@ -799,6 +920,7 @@ export class Runtime {
     chat: string | null = null,
   ) {
     if (this.closing) throw new Error("Serviço encerrando");
+    this.assertHandoffAvailable(conversationId);
     if (
       !/^[\w:.-]{1,160}$/.test(requestId) ||
       !text.trim() ||
@@ -823,6 +945,7 @@ export class Runtime {
         "Conecte o provider desta conversa antes de enviar mensagens ou executar tarefas",
       );
     this.assertConversationAvailable(conversationId);
+    this.assertHandoffAvailable(conversationId);
     this.store.run(
       "INSERT OR IGNORE INTO requests(conversationId,requestId,text,source,chat) VALUES (?,?,?,?,?)",
       conversationId,
@@ -858,6 +981,15 @@ export class Runtime {
       conversationId,
       requestId,
     );
+    this.monitorSubmission(conversation, submission, existing);
+    return { submissionId: submission.id, conversationId, requestId };
+  }
+  private monitorSubmission(
+    conversation: Awaited<ReturnType<Runtime["conversation"]>>,
+    submission: Submission,
+    row: RequestRow,
+  ) {
+    const { conversationId, requestId, source, chat } = row;
     const key = `${conversationId}:${requestId}`;
     if (!this.monitors.has(key)) {
       const monitor = (async () => {
@@ -917,7 +1049,6 @@ export class Runtime {
         .finally(() => this.monitors.delete(key));
       this.monitors.set(key, monitor);
     }
-    return { submissionId: submission.id, conversationId, requestId };
   }
   private async scope(api: ToolExecutionApi) {
     const page = await api.commit(
@@ -966,7 +1097,11 @@ export class Runtime {
       );
   }
   async recordAction(action: Action) {
-    if (this.store.conversationDeleted(action.conversationId)) return;
+    if (
+      this.store.conversationDeleted(action.conversationId) ||
+      this.isConversationHeld(action.conversationId)
+    )
+      return;
     if (
       ["done", "failed", "denied", "uncertain", "reconciled"].includes(
         action.state,
@@ -980,7 +1115,11 @@ export class Runtime {
       );
   }
   async recordMcpOutcome(call: McpCall) {
-    if (this.store.conversationDeleted(call.conversationId)) return;
+    if (
+      this.store.conversationDeleted(call.conversationId) ||
+      this.isConversationHeld(call.conversationId)
+    )
+      return;
     if (
       ["done", "failed", "uncertain", "reconciled", "abandoned"].includes(
         call.state,
@@ -1003,6 +1142,7 @@ export class Runtime {
         actions: this.store.actions(id),
         mcpCalls: this.mcpCalls?.list(id) ?? [],
         mcpInteractions: this.mcpCalls?.interactions(id) ?? [],
+        cuaHandoffs: this.cuaHandoffs?.list(id) ?? [],
         deliveries: this.store.all(
           "SELECT id,chat,state,result FROM deliveries WHERE id LIKE ?",
           `${id}:%`,
@@ -1024,11 +1164,21 @@ export class Runtime {
   async close() {
     this.closing = true;
     await this.tasks.close();
+    await this.cuaHandoffs?.close();
     await this.mcpCalls?.close();
     await this.commands.close();
     await this.harness.close(context);
     await Promise.allSettled(this.monitors.values());
     this.store.close();
     await this.release();
+  }
+  isConversationHeld(id: string) {
+    return this.cuaHandoffs?.holds(id) ?? false;
+  }
+  assertHandoffAvailable(id: string) {
+    if (this.isConversationHeld(id))
+      throw new ConversationBusyError(
+        "Conversa pausada para intervenção humana CUA. Devolva o controle pela interface antes de continuar.",
+      );
   }
 }
