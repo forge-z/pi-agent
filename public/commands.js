@@ -1,3 +1,23 @@
+const { errorText, t, text, plain } = globalThis.PiI18n || {
+  errorText: (source) => source,
+  t: (source, values = []) =>
+    source.replace(/\{(\d+)\}/g, (match, index) =>
+      index < values.length ? String(values[index]) : match,
+    ),
+  text: (element, render) => {
+    element.textContent = typeof render === "function" ? render() : render;
+    return element;
+  },
+  attr: (element, name, render) =>
+    element.setAttribute(
+      name,
+      typeof render === "function" ? render() : render,
+    ),
+  plain: (element, value) => {
+    element.textContent = value;
+  },
+  locale: () => "pt-BR",
+};
 function commandName(command) {
   return String(command?.name || "")
     .replace(/^\/+/, "")
@@ -91,7 +111,7 @@ export function createSlashAutocomplete({ api, document, input, list }) {
     if (message) {
       const status = document.createElement("p");
       status.className = "command-suggestion-status";
-      status.textContent = message;
+      text(status, message);
       list.append(status);
       list.hidden = false;
       open = true;
@@ -117,13 +137,13 @@ export function createSlashAutocomplete({ api, document, input, list }) {
         const heading = document.createElement("span");
         heading.className = "command-option-heading";
         const name = document.createElement("strong");
-        name.textContent = `/${commandName(command)}`;
+        plain(name, `/${commandName(command)}`);
         const usage = document.createElement("small");
-        usage.textContent = command.usage || `/${commandName(command)}`;
+        plain(usage, command.usage || `/${commandName(command)}`);
         heading.append(name, usage);
         const description = document.createElement("span");
         description.className = "command-option-description";
-        description.textContent = command.description || "";
+        text(description, () => t(command.description || ""));
         option.append(heading, description);
         option.onclick = () => select(command);
         return option;
@@ -162,13 +182,15 @@ export function createSlashAutocomplete({ api, document, input, list }) {
       render();
       return;
     }
-    render("Carregando comandos…");
+    render(() => t("Carregando comandos…"));
     try {
       await ensureCommands();
       if (request === generation) render();
     } catch (error) {
       if (request === generation)
-        render(error.message || "Não foi possível carregar os comandos.");
+        render(
+          () => errorText(error.message) || t("Não foi possível carregar os comandos."),
+        );
     }
   }
 

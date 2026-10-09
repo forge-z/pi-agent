@@ -584,6 +584,15 @@ p {
   font-variant-numeric: tabular-nums;
   letter-spacing: 0;
 }
+.sidebar-view-toggle {
+  width: 100%;
+  justify-content: flex-start;
+  min-height: 34px;
+  padding: 6px 12px;
+  margin: -5px 0 5px;
+  font-size: 0.68rem;
+  color: var(--muted);
+}
 #conversations {
   overflow-y: auto;
   scrollbar-width: thin;
@@ -591,6 +600,17 @@ p {
   min-height: 54px;
   margin: 0 -2px;
   padding: 2px;
+}
+#conversations[data-actions-open="true"] {
+  flex-shrink: 0;
+  overflow-y: visible;
+}
+.conversation-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px;
+  margin-bottom: 4px;
 }
 #conversations button {
   display: flex;
@@ -607,6 +627,46 @@ p {
   font-weight: 400;
   border-radius: 8px;
   gap: 10px;
+}
+#conversations .conversation-select {
+  flex: 1 1 0;
+  width: auto;
+  min-width: 0;
+  margin: 0;
+}
+#conversations .conversation-actions-toggle {
+  flex: 0 0 36px;
+  width: 36px;
+  min-height: 36px;
+  padding: 0;
+  margin: 0;
+  justify-content: center;
+  font-size: 1.1rem;
+  line-height: 1;
+}
+#conversations .conversation-action-panel {
+  display: flex;
+  flex-basis: 100%;
+  justify-content: flex-end;
+  gap: 4px;
+  padding: 0 4px 4px;
+}
+#conversations .conversation-action-panel[hidden] {
+  display: none;
+}
+#conversations .conversation-action {
+  width: auto;
+  min-height: 34px;
+  padding: 6px 9px;
+  margin: 0;
+  font-size: 0.66rem;
+}
+#conversations .deleted-conversation-label {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 #conversations button .icon {
   width: 17px;

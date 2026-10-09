@@ -1,3 +1,4 @@
+import { interfaceLanguage } from "./interface-fixture.js";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
@@ -63,7 +64,13 @@ function renderMcpCalls(calls: Call[], conversationId = "conversation-a") {
     data?: Record<string, unknown>;
   }> = [];
   let rendered = 0;
+  const i18n = interfaceLanguage().i18n;
+  const node = (tag: string, value?: unknown, className = "") =>
+    new Element(tag, value === undefined ? "" : String(value), className);
   const context = {
+    ...i18n,
+    uiNode: (tag: string, render: () => string, className = "") =>
+      i18n.text(node(tag, undefined, className), render),
     snapshot: { mcpCalls: calls },
     conversationId,
     cards,

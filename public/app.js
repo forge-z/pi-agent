@@ -1,6 +1,27 @@
+const { errorText, t, text, attr, plain, locale } = globalThis.PiI18n || {
+  errorText: (source) => source,
+  t: (source, values = []) =>
+    source.replace(/\{(\d+)\}/g, (match, index) =>
+      index < values.length ? String(values[index]) : match,
+    ),
+  text: (element, render) => {
+    element.textContent = typeof render === "function" ? render() : render;
+    return element;
+  },
+  attr: (element, name, render) =>
+    element.setAttribute(
+      name,
+      typeof render === "function" ? render() : render,
+    ),
+  plain: (element, value) => {
+    element.textContent = value;
+  },
+  locale: () => "pt-BR",
+};
 import { configureUI } from "/settings.js";
 import { renderMarkdown, renderTextPreview } from "/markdown.js";
 import { historyWindow } from "/history.js";
+import { attachConversationManagementUI } from "/conversations.js";
 import {
   canDispatchCommandResult,
   createSlashAutocomplete,
@@ -26,6 +47,7 @@ let providerPoll = null;
 let promptId = null;
 let pendingMessage = null;
 let conversationsCache = [];
+let conversationManagementUI = null;
 const mobile = window.matchMedia("(max-width: 760px)");
 function icon(name) {
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -132,7 +154,7 @@ function showLogin() {
   settingsUI.reset();
 }
 function report(error) {
-  $("error").textContent = error.message;
+  text($("error"), () => errorText(error.message));
 }
 const guard =
   (fn) =>
@@ -145,9 +167,12 @@ const guard =
   };
 function node(tag, value, cls) {
   const element = document.createElement(tag);
-  if (value !== undefined) element.textContent = value;
+  if (value !== undefined) plain(element, value);
   if (cls) element.className = cls;
   return element;
+}
+function uiNode(tag, render, cls) {
+  return text(node(tag, undefined, cls), render);
 }
 const slashAutocomplete = createSlashAutocomplete({
   api,
@@ -195,13 +220,13 @@ function commandStatusRaw(status) {
 }
 function commandStatusText(status) {
   const value = commandStatusRaw(status);
-  if (!value) return "Status não informado";
-  return commandStatusLabels[value.toLocaleLowerCase()] || value;
+  if (!value) return t("Status não informado");
+  return t(commandStatusLabels[value.toLocaleLowerCase()] || value);
 }
 function localizeCommandText(text, status) {
   if (typeof text !== "string" || !text) return "";
   const raw = commandStatusRaw(status);
-  const label = raw && commandStatusLabels[raw.toLocaleLowerCase()];
+  const label = raw && t(commandStatusLabels[raw.toLocaleLowerCase()] || "");
   if (!label) return text;
   return text.replace(new RegExp(`\\b${raw}\\b`, "gi"), label);
 }
@@ -218,11 +243,11 @@ function showUncertainCommandResult(result) {
     iconName: "warning-circle",
     eyebrow: "RESULTADO INCERTO",
     title: "Não foi possível confirmar o resultado.",
-    intro:
+    intro: () =>
       localizeCommandText(result.text, result.status) ||
-      `O comando /${command} não será repetido automaticamente.`,
+      t("O comando /{0} não será repetido automaticamente.", [command]),
     content: [
-      commandResultCard("Status", commandStatusText(result.status)),
+      commandResultCard("Status", () => commandStatusText(result.status)),
       ...content,
     ],
   });
@@ -242,6 +267,7 @@ function showCommandResults({
   intro,
   content = [],
   preserveCompactPoll = false,
+  titleIsData = false,
 }) {
   slashAutocomplete.close();
   sidebar(false, false);
@@ -251,17 +277,23 @@ function showCommandResults({
     activeCompactRequest = null;
   }
   $("command-results-icon").replaceChildren(icon(iconName || "asterisk"));
-  $("command-results-eyebrow").textContent = eyebrow || "COMANDO DO PI";
-  $("command-results-title").textContent = title || "Resultado";
-  $("command-results-intro").textContent = intro || "";
+  text($("command-results-eyebrow"), () => t(eyebrow || "COMANDO DO PI"));
+  if (titleIsData) plain($("command-results-title"), title || "");
+  else text($("command-results-title"), () => t(title || "Resultado"));
+  text(
+    $("command-results-intro"),
+    typeof intro === "function" ? intro : () => t(intro || ""),
+  );
   $("command-results-body").replaceChildren(...content);
   if (!$("command-results-dialog").open)
     $("command-results-dialog").showModal();
 }
 function commandResultCard(label, value) {
   const card = node("section", undefined, "command-result-card");
-  card.append(node("strong", label));
-  if (typeof value === "string" || typeof value === "number")
+  card.append(uiNode("strong", () => t(label)));
+  if (typeof value === "function")
+    card.append(uiNode("p", value, "command-result-value"));
+  else if (typeof value === "string" || typeof value === "number")
     card.append(node("p", String(value), "command-result-value"));
   else card.append(node("pre", prettyCommandData(value)));
   return card;
@@ -277,7 +309,7 @@ async function showHelpResult(result, sourceConversation) {
       node("code", command.usage || `/${command.name}`),
     );
     item.append(heading);
-    item.append(node("p", command.description || ""));
+    item.append(uiNode("p", () => t(command.description || "")));
     return item;
   });
   if (!body.length && result.data !== undefined)
@@ -332,6 +364,7 @@ async function openAgentConversation(agent) {
       iconName: "check-circle",
       eyebrow: "CONVERSA",
       title: agent.title || agent.id,
+      titleIsData: true,
       intro: response.text,
     });
   }
@@ -359,7 +392,9 @@ function showAgentPicker(result) {
     return button;
   });
   if (!body.length)
-    body.push(node("p", "Nenhum agente está disponível para esta conta."));
+    body.push(
+      uiNode("p", () => t("Nenhum agente está disponível para esta conta.")),
+    );
   showCommandResults({
     iconName: "asterisk",
     eyebrow: "CONVERSAS DISPONÍVEIS",
@@ -383,8 +418,11 @@ function compactStatusIsTerminal(status) {
   ].includes(value);
 }
 function renderCompactResult(result, preserveCompactPoll = false) {
-  const status = commandStatusText(result.status);
-  const content = [commandResultCard("Status recebido", status)];
+  const content = [
+    commandResultCard("Status recebido", () =>
+      commandStatusText(result.status),
+    ),
+  ];
   if (result.taskId) content.push(commandResultCard("Tarefa", result.taskId));
   if (result.data !== undefined)
     content.push(commandResultCard("Resultado aceito", result.data));
@@ -424,7 +462,11 @@ function renderCommandTasks(tasks) {
   const list = $("command-tasks-list");
   if (!tasks.length) {
     list.replaceChildren(
-      node("p", "Nenhuma execução ativa no Pi.", "command-task-empty"),
+      uiNode(
+        "p",
+        () => t("Nenhuma execução ativa no Pi."),
+        "command-task-empty",
+      ),
     );
     return;
   }
@@ -433,16 +475,18 @@ function renderCommandTasks(tasks) {
       const item = node("article", undefined, "command-task-item");
       item.append(node("strong", task.title || task.kind || task.id));
       const meta = node("div", undefined, "command-task-meta");
-      for (const value of [
-        task.status ? commandStatusText(task.status) : null,
-        task.phase ? commandStatusText(task.phase) : null,
-        task.conversationId ? `Conversa ${task.conversationId}` : null,
-        task.background ? "Em segundo plano" : "Em conversa",
-        task.abortRequested ? "Cancelamento solicitado" : null,
-      ])
-        if (value) meta.append(node("span", String(value)));
+      const values = [
+        task.status ? () => commandStatusText(task.status) : null,
+        task.phase ? () => commandStatusText(task.phase) : null,
+        task.conversationId
+          ? () => t("Conversa {0}", [task.conversationId])
+          : null,
+        () => t(task.background ? "Em segundo plano" : "Em conversa"),
+        task.abortRequested ? () => t("Cancelamento solicitado") : null,
+      ];
+      for (const value of values) if (value) meta.append(uiNode("span", value));
       item.append(meta);
-      if (task.id) item.append(node("p", `ID ${task.id}`));
+      if (task.id) item.append(uiNode("p", () => t("ID {0}", [task.id])));
       return item;
     }),
   );
@@ -450,13 +494,20 @@ function renderCommandTasks(tasks) {
 async function refreshCommandTasks() {
   const dialog = $("command-tasks-dialog");
   if (!dialog.open) return;
-  $("command-tasks-error").textContent = "";
+  plain($("command-tasks-error"), "");
   const response = await api("/api/commands/tasks");
   if (!dialog.open) return;
   const tasks = Array.isArray(response) ? response : response.tasks || [];
   renderCommandTasks(tasks);
-  $("command-tasks-updated").textContent =
-    `Atualizado às ${new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}`;
+  const updatedAt = new Date();
+  text($("command-tasks-updated"), () =>
+    t("Atualizado às {0}", [
+      updatedAt.toLocaleTimeString(locale(), {
+        hour: "2-digit",
+        minute: "2-digit",
+      }),
+    ]),
+  );
 }
 async function openCommandTasks() {
   clearInterval(commandTasksPoll);
@@ -467,12 +518,13 @@ async function openCommandTasks() {
   try {
     await refreshCommandTasks();
   } catch (error) {
-    $("command-tasks-error").textContent = error.message;
+    text($("command-tasks-error"), () => errorText(error.message));
   }
   if (dialog.open)
     commandTasksPoll = setInterval(() => {
       void refreshCommandTasks().catch((error) => {
-        if (dialog.open) $("command-tasks-error").textContent = error.message;
+        if (dialog.open)
+          text($("command-tasks-error"), () => errorText(error.message));
       });
     }, 3500);
 }
@@ -487,7 +539,7 @@ $("command-tasks-dialog").addEventListener("close", () => {
 });
 $("command-tasks-refresh").onclick = () => {
   void refreshCommandTasks().catch((error) => {
-    $("command-tasks-error").textContent = error.message;
+    text($("command-tasks-error"), () => errorText(error.message));
   });
 };
 async function handleCommandResult(
@@ -590,39 +642,14 @@ async function handleCommandResult(
   });
 }
 function renderConversations() {
-  const query = $("search-conversations").value.toLocaleLowerCase("pt-BR");
-  const filtered = conversationsCache.filter((conversation) =>
-    conversation.title.toLocaleLowerCase("pt-BR").includes(query),
-  );
-  $("conversation-count").textContent = conversationsCache.length;
-  $("search-empty").hidden = filtered.length > 0;
-  $("conversations").replaceChildren();
-  for (const conversation of filtered) {
-    const button = node("button");
-    button.append(
-      icon("chat-circle"),
-      node("span", conversation.title, "conversation-label"),
-    );
-    button.title = conversation.title;
-    button.setAttribute(
-      "aria-current",
-      String(conversation.id === conversationId),
-    );
-    button.onclick = guard(async () => {
-      sidebar(false, false);
-      await select(conversation.id, conversation.title);
-      if (mobile.matches) $("message").focus();
-    });
-    $("conversations").append(button);
-  }
+  conversationManagementUI?.render(conversationsCache);
 }
-$("search-conversations").oninput = renderConversations;
 async function loadConversations() {
   conversationsCache = await api("/api/conversations");
   const current = conversationsCache.find(
     (conversation) => conversation.id === conversationId,
   );
-  if (current) $("conversation-title").textContent = current.title;
+  if (current) plain($("conversation-title"), current.title);
   renderConversations();
   return conversationsCache;
 }
@@ -632,23 +659,29 @@ async function refreshStatus() {
   if (status.mode === "demo") {
     $("banner").append(
       icon("circle-dashed"),
-      node("strong", "Modo demonstração"),
-      node("small", "Respostas locais, sem conexão com contas externas."),
+      uiNode("strong", () => t("Modo demonstração")),
+      uiNode("small", () =>
+        t("Respostas locais, sem conexão com contas externas."),
+      ),
     );
   }
-  $("model-label").textContent =
-    status.mode === "demo" ? "Demonstração" : status.model;
-  $("provider-status").textContent = status.credentials
-    ? "Conta conectada"
-    : status.mode === "demo"
-      ? "Modo demonstração"
-      : "Use sua conta para começar";
-  document.querySelector(".provider-label").textContent =
+  text($("model-label"), () =>
+    status.mode === "demo" ? t("Demonstração") : status.model,
+  );
+  text($("provider-status"), () =>
+    status.credentials
+      ? t("Conta conectada")
+      : status.mode === "demo"
+        ? t("Modo demonstração")
+        : t("Use sua conta para começar"),
+  );
+  text(document.querySelector(".provider-label"), () =>
     status.mode === "demo"
       ? "ChatGPT"
       : status.credentials
-        ? "ChatGPT conectado"
-        : "Conectar ChatGPT";
+        ? t("ChatGPT conectado")
+        : t("Conectar ChatGPT"),
+  );
   $("provider-button").disabled = status.mode === "demo";
   settingsUI.refreshLabel();
 }
@@ -669,6 +702,7 @@ async function create() {
     title: "Nova conversa",
   });
   $("search-conversations").value = "";
+  conversationManagementUI?.showActiveView();
   sidebar(false, false);
   await select(conversation.id, "Nova conversa");
 }
@@ -687,9 +721,9 @@ async function select(id, title) {
   historyNavigation = null;
   historyPage = 0;
   lastSnapshot = null;
-  $("connection").textContent = "Conectando";
+  text($("connection"), () => t("Conectando"));
   $("connection").dataset.state = "connecting";
-  $("conversation-title").textContent = title;
+  plain($("conversation-title"), title);
   history.replaceState(null, "", `?c=${encodeURIComponent(id)}`);
   await loadConversations();
   const snapshot = await api(`/api/conversations/${id}`);
@@ -701,12 +735,12 @@ async function select(id, title) {
   });
   events.onopen = () => {
     if (id !== conversationId) return;
-    $("connection").textContent = "Sincronizado";
+    text($("connection"), () => t("Sincronizado"));
     $("connection").dataset.state = "connected";
   };
   events.onerror = () => {
     if (id !== conversationId) return;
-    $("connection").textContent = "Reconectando…";
+    text($("connection"), () => t("Reconectando…"));
     $("connection").dataset.state = "reconnecting";
   };
 }
@@ -731,9 +765,9 @@ function render(snapshot) {
   if (page.pages > 1) {
     if (!historyNavigation) {
       const navigation = node("nav", undefined, "history-navigation");
-      navigation.setAttribute("aria-label", "Histórico da conversa");
-      const older = node("button", "Ver anteriores");
-      const newer = node("button", "Ver mais recentes");
+      attr(navigation, "aria-label", () => t("Histórico da conversa"));
+      const older = uiNode("button", () => t("Ver anteriores"));
+      const newer = uiNode("button", () => t("Ver mais recentes"));
       const label = node("span");
       const change = (next) => {
         historyPage = next;
@@ -748,7 +782,7 @@ function render(snapshot) {
     }
     historyNavigation.older.disabled = page.page >= page.pages - 1;
     historyNavigation.newer.disabled = page.page === 0;
-    historyNavigation.label.textContent = `${page.page + 1} / ${page.pages}`;
+    plain(historyNavigation.label, `${page.page + 1} / ${page.pages}`);
     messages.push(historyNavigation.navigation);
   }
   for (const key of historyNodes.keys())
@@ -797,19 +831,18 @@ function render(snapshot) {
     if (message.role === "assistant") speaker.append(piMark());
     if (isTool) speaker.append(icon("plug"));
     speaker.append(
-      node(
-        "span",
+      uiNode("span", () =>
         message.role === "user"
-          ? "Você"
+          ? t("Você")
           : message.role === "assistant"
             ? "Pi"
-            : `Ferramenta · ${message.toolName}`,
+            : t("Ferramenta · {0}", [message.toolName]),
       ),
     );
     const body = node("div", undefined, "message-body");
     if (isTool) attachToolBody(article, body, () => renderTextPreview(blocks));
     else if (message.role === "user" && blocks.length <= 32768)
-      body.textContent = blocks;
+      plain(body, blocks);
     else body.append(renderMarkdown(blocks));
     article.append(speaker, body);
     messages.push(article);
@@ -833,7 +866,10 @@ function render(snapshot) {
     if (partialText) {
       const article = node("article", undefined, "message assistant live");
       const speaker = node("span", undefined, "speaker");
-      speaker.append(piMark(), node("span", "Pi está escrevendo"));
+      speaker.append(
+        piMark(),
+        uiNode("span", () => t("Pi está escrevendo")),
+      );
       const body = node("div", undefined, "message-body");
       body.append(renderMarkdown(partialText));
       article.append(speaker, body);
@@ -847,9 +883,9 @@ function render(snapshot) {
   $("main-content").classList.toggle("is-empty", empty);
   $("messages").replaceChildren(...messages);
   toolVisibility.apply();
-  $("run-status").textContent = live?.run
-    ? "Pi está trabalhando…"
-    : "Conversa salva";
+  text($("run-status"), () =>
+    live?.run ? t("Pi está trabalhando…") : t("Conversa salva"),
+  );
   const actionLabels = {
     pending: "Aguardando você",
     running: "Em andamento",
@@ -889,18 +925,21 @@ function render(snapshot) {
               : "shield-check",
         ),
         title,
-        node(
+        uiNode(
           "span",
-          actionLabels[action.state] || action.state,
+          () => t(actionLabels[action.state] || action.state),
           "action-status",
         ),
       );
       card.append(top);
       if (action.state === "pending")
         card.append(
-          node(
+          uiNode(
             "p",
-            "Revise os detalhes. Esta ação só acontece com sua confirmação.",
+            () =>
+              t(
+                "Revise os detalhes. Esta ação só acontece com sua confirmação.",
+              ),
             "action-note",
           ),
         );
@@ -908,7 +947,10 @@ function render(snapshot) {
         const section = node("details");
         section.open = open;
         const body = node("div", undefined, "message-body");
-        section.append(node("summary", label), body);
+        section.append(
+          uiNode("summary", () => t(label)),
+          body,
+        );
         attachToolBody(section, body, () =>
           renderTextPreview(typeof value === "function" ? value() : value),
         );
@@ -933,9 +975,9 @@ function render(snapshot) {
           ["approve", "Confirmar ação"],
           ["deny", "Recusar"],
         ]) {
-          const button = node(
+          const button = uiNode(
             "button",
-            label,
+            () => t(label),
             decision === "deny" ? "subtle" : "",
           );
           button.prepend(icon(decision === "approve" ? "check" : "x"));
@@ -959,11 +1001,13 @@ function render(snapshot) {
         }
         card.append(buttons);
       } else if (action.state === "uncertain") {
-        const label = node("label", "Resultado verificado no serviço externo");
+        const label = uiNode("label", () =>
+          t("Resultado verificado no serviço externo"),
+        );
         const input = node("textarea");
         input.id = `note-${action.id}`;
         label.htmlFor = input.id;
-        const button = node("button", "Registrar resultado");
+        const button = uiNode("button", () => t("Registrar resultado"));
         button.onclick = guard(async () => {
           await api(
             `/api/conversations/${actionConversation}/actions/${action.id}`,
@@ -987,21 +1031,22 @@ function render(snapshot) {
       const heading = node("div", undefined, "action-heading");
       heading.append(
         icon("shield-check"),
-        node("strong", `Solicitação de ${interaction.server}`),
+        uiNode("strong", () => t("Solicitação de {0}", [interaction.server])),
       );
       card.append(
         heading,
-        node(
+        uiNode(
           "p",
-          payload.message ||
+          () =>
+            payload.message ||
             payload.interaction?.message ||
-            "O servidor MCP aguarda sua decisão.",
+            t("O servidor MCP aguarda sua decisão."),
           "action-note",
         ),
       );
       const detail = node("details");
       detail.append(
-        node("summary", "Detalhes enviados pelo servidor"),
+        uiNode("summary", () => t("Detalhes enviados pelo servidor")),
         node("pre", JSON.stringify(payload, null, 2)),
       );
       card.append(detail);
@@ -1009,7 +1054,7 @@ function render(snapshot) {
         try {
           const url = new URL(payload.url);
           if (url.protocol === "https:" && !url.username && !url.password) {
-            const link = node("a", "Abrir solicitação no serviço");
+            const link = uiNode("a", () => t("Abrir solicitação no serviço"));
             link.href = url.href;
             link.target = "_blank";
             link.rel = "noopener noreferrer";
@@ -1065,9 +1110,8 @@ function render(snapshot) {
       let customContent;
       if (interaction.kind === "resume") {
         const field = node("div", undefined, "form-field");
-        const label = node(
-          "label",
-          "Resposta ao formulário, se solicitada (JSON)",
+        const label = uiNode("label", () =>
+          t("Resposta ao formulário, se solicitada (JSON)"),
         );
         customContent = node("textarea");
         customContent.rows = 3;
@@ -1080,7 +1124,7 @@ function render(snapshot) {
       const error = node("p", undefined, "error");
       error.setAttribute("role", "alert");
       const controls = node("div", undefined, "action-buttons");
-      const accept = node("button", "Aceitar");
+      const accept = uiNode("button", () => t("Aceitar"));
       accept.type = "submit";
       const decide = async (action) => {
         let content;
@@ -1101,7 +1145,7 @@ function render(snapshot) {
           }
           if (customContent) content = JSON.parse(customContent.value || "{}");
         }
-        error.textContent = "";
+        plain(error, "");
         controls
           .querySelectorAll("button")
           .forEach((button) => (button.disabled = true));
@@ -1116,7 +1160,7 @@ function render(snapshot) {
           );
           if (conversationId === interactionConversation) render(updated);
         } catch (failure) {
-          error.textContent = failure.message;
+          text(error, () => errorText(failure.message));
         } finally {
           controls
             .querySelectorAll("button")
@@ -1125,8 +1169,8 @@ function render(snapshot) {
       };
       form.onsubmit = (event) => {
         event.preventDefault();
-        void decide("accept").catch(
-          (failure) => (error.textContent = failure.message),
+        void decide("accept").catch((failure) =>
+          text(error, () => errorText(failure.message)),
         );
       };
       controls.append(accept);
@@ -1134,12 +1178,12 @@ function render(snapshot) {
         ["decline", "Recusar"],
         ["cancel", "Cancelar"],
       ]) {
-        const button = node("button", title);
+        const button = uiNode("button", () => t(title));
         button.type = "button";
         button.className = "subtle";
         button.onclick = () => {
-          void decide(action).catch(
-            (failure) => (error.textContent = failure.message),
+          void decide(action).catch((failure) =>
+            text(error, () => errorText(failure.message)),
           );
         };
         controls.append(button);
@@ -1181,20 +1225,22 @@ function render(snapshot) {
       const card = node("article", undefined, "action-card");
       card.append(
         node("strong", `${call.server} / ${call.tool}`),
-        node(
-          "p",
-          "A chamada foi enviada, mas o efeito e o resultado não foram confirmados. Ela não será reenviada automaticamente. Verifique no serviço externo antes de registrar o resultado.",
+        uiNode("p", () =>
+          t(
+            "A chamada foi enviada, mas o efeito e o resultado não foram confirmados. Ela não será reenviada automaticamente. Verifique no serviço externo antes de registrar o resultado.",
+          ),
         ),
       );
       const safeError = safeMcpErrorMessage(call.result);
-      if (safeError) card.append(node("p", safeError, "action-note"));
+      if (safeError)
+        card.append(uiNode("p", () => t(safeError), "action-note"));
       const form = node("form", undefined, "management-form");
       const input = node("input");
       input.required = true;
       input.id = `reconcile-${call.id}`;
-      const label = node("label", "Resultado verificado");
+      const label = uiNode("label", () => t("Resultado verificado"));
       label.htmlFor = input.id;
-      const button = node("button", "Registrar resultado");
+      const button = uiNode("button", () => t("Registrar resultado"));
       button.type = "submit";
       const error = node("p", undefined, "error");
       form.append(label, input, button, error);
@@ -1210,7 +1256,7 @@ function render(snapshot) {
           .then((updated) => {
             if (conversationId === callConversation) render(updated);
           })
-          .catch((failure) => (error.textContent = failure.message))
+          .catch((failure) => text(error, () => errorText(failure.message)))
           .finally(() => (button.disabled = false));
       };
       card.append(form);
@@ -1263,9 +1309,11 @@ function render(snapshot) {
     ...snapshot.deliveries
       .filter((d) => d.state === "uncertain")
       .map((d) =>
-        node(
-          "p",
-          `Entrega ${d.id} incerta. Verifique o Telegram; não será reenviada automaticamente.`,
+        uiNode("p", () =>
+          t(
+            "Entrega {0} incerta. Verifique o Telegram; não será reenviada automaticamente.",
+            [d.id],
+          ),
         ),
       ),
   );
@@ -1273,14 +1321,14 @@ function render(snapshot) {
 }
 $("login-form").onsubmit = async (event) => {
   event.preventDefault();
-  $("login-error").textContent = "";
+  plain($("login-error"), "");
   $("login-submit").disabled = true;
   try {
     await api("/api/login", "POST", { password: $("password").value });
     $("password").value = "";
     await workspace();
   } catch (error) {
-    $("login-error").textContent = error.message;
+    text($("login-error"), () => errorText(error.message));
   } finally {
     $("login-submit").disabled = false;
   }
@@ -1311,7 +1359,7 @@ $("message-form").onsubmit = guard(async (event) => {
   );
   const outgoingMessage = { ...pendingMessage };
   $("send").disabled = true;
-  $("error").textContent = "";
+  plain($("error"), "");
   try {
     const result = await api(
       `/api/conversations/${sentConversation}/messages`,
@@ -1352,20 +1400,20 @@ $("provider-button").onclick = guard(async () => {
   $("provider-dialog").showModal();
   const poll = async () => {
     const state = await api(`/api/provider/login/${providerFlow}`);
-    $("auth-state").textContent =
+    text($("auth-state"), () =>
       state.state === "done"
-        ? "ChatGPT conectado."
+        ? t("ChatGPT conectado.")
         : state.state === "failed"
-          ? "Login não concluído. Tente novamente."
-          : "Continue o login no link do provider.";
+          ? t("Login não concluído. Tente novamente.")
+          : t("Continue o login no link do provider."),
+    );
     const notices = [];
     for (const event of state.events) {
       if (event.type === "auth_url" || event.type === "device_code") {
-        const link = node(
-          "a",
+        const link = uiNode("a", () =>
           event.type === "device_code"
-            ? `Abrir provider · código ${event.userCode}`
-            : "Abrir login OpenAI",
+            ? t("Abrir provider · código {0}", [event.userCode])
+            : t("Abrir login OpenAI"),
         );
         link.href = event.url || event.verificationUri;
         link.target = "_blank";
@@ -1376,7 +1424,7 @@ $("provider-button").onclick = guard(async () => {
     $("auth-events").replaceChildren(...notices);
     $("auth-form").hidden = !state.prompt;
     promptId = state.prompt?.id;
-    if (state.prompt) $("auth-label").textContent = state.prompt.message;
+    if (state.prompt) plain($("auth-label"), state.prompt.message);
     if (["done", "failed"].includes(state.state)) {
       clearInterval(providerPoll);
       providerPoll = null;
@@ -1468,5 +1516,51 @@ const settingsUI = configureUI(api, {
 attachTelegramUI(api, {
   getConversationId: () => conversationId,
   getConversationTitle: () => $("conversation-title").textContent,
+});
+conversationManagementUI = attachConversationManagementUI(api, {
+  getConversationId: () => conversationId,
+  getConversations: () => conversationsCache,
+  loadConversations,
+  closeSidebar: () => sidebar(false, false),
+  selectConversation: async (id, title) => {
+    await select(id, title);
+    if (mobile.matches) $("message").focus();
+  },
+  report,
+  onRenamed: (conversation) => {
+    conversationsCache = conversationsCache.map((current) =>
+      current.id === conversation.id
+        ? { ...current, ...conversation }
+        : current,
+    );
+    if (conversation.id === conversationId)
+      plain($("conversation-title"), conversation.title);
+    renderConversations();
+  },
+  afterDelete: async (id, wasActive) => {
+    sessionStorage.removeItem(`pending:${id}`);
+    if (!wasActive) {
+      await loadConversations();
+      return;
+    }
+    events?.close();
+    events = null;
+    conversationId = null;
+    pendingMessage = null;
+    clearCommandPolls();
+    rendered = null;
+    renderedActions = "";
+    historyNodes.clear();
+    historyNavigation = null;
+    historyPage = 0;
+    lastSnapshot = null;
+    settingsUI.updateConversation(null);
+    $("message").value = "";
+    text($("conversation-title"), () => t("Nova conversa"));
+    history.replaceState(null, "", location.pathname);
+    const available = await loadConversations();
+    if (available.length) await select(available[0].id, available[0].title);
+    else await create();
+  },
 });
 api("/api/status").then(workspace).catch(showLogin);

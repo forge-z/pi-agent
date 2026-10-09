@@ -253,10 +253,20 @@ export class TelegramConnection {
             this.config.userId,
           )
         : undefined;
-    const conversationId =
+    const candidateConversationId =
       mapped?.conversationId ??
       metadata?.conversationId ??
       (legacy.length === 1 ? legacy[0].conversationId : null);
+    const conversationId =
+      candidateConversationId &&
+      !this.app.store.conversationDeleted(candidateConversationId) &&
+      (mapped ||
+        !this.app.store.get(
+          "SELECT 1 FROM telegram_initial_revocations WHERE conversationId=?",
+          candidateConversationId,
+        ))
+        ? candidateConversationId
+        : null;
     return {
       state: this.state,
       configured: !!this.config,
@@ -340,7 +350,7 @@ export class TelegramConnection {
       if (
         typeof input.conversationId !== "string" ||
         !this.app.store.get(
-          "SELECT id FROM conversations WHERE id=?",
+          "SELECT id FROM conversations WHERE id=? AND id NOT IN (SELECT conversationId FROM conversation_lifecycle WHERE deletedAt IS NOT NULL)",
           input.conversationId,
         )
       )
@@ -419,6 +429,7 @@ export class TelegramConnection {
             return this.snapshot();
           }
         }
+        this.app.assertConversationAvailable(input.conversationId);
         this.config = { ...this.candidate, enabled: true, chatId: null };
         this.app.store.db.exec("BEGIN IMMEDIATE");
         try {
@@ -428,6 +439,10 @@ export class TelegramConnection {
             JSON.stringify({ token, botId: bot.id }),
           );
           this.save(configKey, this.config);
+          this.app.store.run(
+            "DELETE FROM telegram_initial_revocations WHERE conversationId=?",
+            input.conversationId,
+          );
           this.save(key, { fingerprint, state: "done" });
           this.app.store.db.exec("COMMIT");
         } catch (error) {
@@ -681,6 +696,22 @@ export class TelegramConnection {
     const offset = this.meta<number>(`telegram:offset:${config.bot.id}`);
     if (offset !== undefined && update.update_id < offset) return;
     const message = update.message;
+    const initialRevoked = !!this.app.store.get(
+      "SELECT 1 FROM telegram_initial_revocations WHERE conversationId=?",
+      config.conversationId,
+    );
+    const activeMapping =
+      config.chatId &&
+      this.app.store.get(
+        "SELECT 1 FROM telegram WHERE chat=? AND user=? AND conversationId NOT IN (SELECT conversationId FROM conversation_lifecycle WHERE deletedAt IS NOT NULL)",
+        config.chatId,
+        config.userId,
+      );
+    const explicitLink =
+      typeof message?.text === "string" &&
+      /^\/(link|start)(?:@[a-zA-Z0-9_]+)?\s+[a-f0-9]{32}\s*$/.test(
+        message.text.trim(),
+      );
     let state = "ignored";
     if (
       message?.chat?.type === "private" &&
@@ -690,7 +721,8 @@ export class TelegramConnection {
       typeof message.text === "string" &&
       message.text.trim() &&
       Number.isSafeInteger(message.chat.id) &&
-      message.chat.id > 0
+      message.chat.id > 0 &&
+      (!initialRevoked || activeMapping || (config.chatId && explicitLink))
     ) {
       const chat = String(message.chat.id);
       const languageCode = /^([a-z]{2})(?:[-_]|$)/i

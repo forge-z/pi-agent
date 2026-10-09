@@ -1,3 +1,23 @@
+const { errorText, t, text, plain, locale } = globalThis.PiI18n || {
+  errorText: (source) => source,
+  t: (source, values = []) =>
+    source.replace(/\{(\d+)\}/g, (match, index) =>
+      index < values.length ? String(values[index]) : match,
+    ),
+  text: (element, render) => {
+    element.textContent = typeof render === "function" ? render() : render;
+    return element;
+  },
+  attr: (element, name, render) =>
+    element.setAttribute(
+      name,
+      typeof render === "function" ? render() : render,
+    ),
+  plain: (element, value) => {
+    element.textContent = value;
+  },
+  locale: () => "pt-BR",
+};
 const labels = {
   unconfigured: "Não configurado",
   migration_required: "Reconexão necessária",
@@ -76,21 +96,21 @@ export function attachTelegramUI(
   }
 
   function setFormError(message = "") {
-    $("telegram-form-error").textContent = message;
+    text($("telegram-form-error"), message);
   }
 
   function setStatusMessage(message = "") {
-    $("telegram-status-message").textContent = message;
+    text($("telegram-status-message"), message);
   }
 
   function botLabel(bot) {
-    if (!bot) return "Bot não identificado";
+    if (!bot) return t("Bot não identificado");
     const details = [];
     if (bot.username)
       details.push(`@${String(bot.username).replace(/^@/, "")}`);
     if (bot.firstName && !bot.username) details.push(bot.firstName);
     if (bot.id !== undefined && bot.id !== null) details.push(`ID ${bot.id}`);
-    return details.join(" · ") || "Bot não identificado";
+    return details.join(" · ") || t("Bot não identificado");
   }
 
   function safeBotUrl(bot) {
@@ -104,7 +124,9 @@ export function attachTelegramUI(
     const timestamp = value < 1_000_000_000_000 ? value * 1000 : value;
     const date = new Date(timestamp);
     if (Number.isNaN(date.getTime())) return "";
-    return `Última atividade confirmada: ${date.toLocaleString("pt-BR")}.`;
+    return t("Última atividade confirmada: {0}.", [
+      date.toLocaleString(locale()),
+    ]);
   }
 
   function updateConflict(status) {
@@ -115,9 +137,13 @@ export function attachTelegramUI(
       !pendingConnectRetry;
     conflictPanel.hidden = !canOfferSwitch;
     if (!canOfferSwitch) return;
-    $("telegram-conflict-bot").textContent = `Bot: ${botLabel(status.bot)}.`;
-    $("telegram-webhook-url").textContent =
-      status.webhookUrl || "Endereço não informado";
+    text($("telegram-conflict-bot"), () =>
+      t("Bot: {0}.", [botLabel(status.bot)]),
+    );
+    text(
+      $("telegram-webhook-url"),
+      () => status.webhookUrl || t("Endereço não informado"),
+    );
     $("telegram-replace-webhook").disabled =
       mutationInFlight ||
       !status.webhookVersion ||
@@ -140,18 +166,22 @@ export function attachTelegramUI(
     latestStatus = status;
     const stateNode = $("telegram-state");
     stateNode.dataset.state = state;
-    stateNode.textContent = labels[state] || state;
-    $("telegram-bot").textContent = botLabel(status.bot);
-    $("telegram-last-success").textContent = formatLastSuccess(
-      status.lastSuccessAt,
+    text(stateNode, () => t(labels[state] || state));
+    text($("telegram-bot"), () => botLabel(status.bot));
+    text($("telegram-last-success"), () =>
+      formatLastSuccess(status.lastSuccessAt),
     );
     const awaitingFirstMessage =
       state === "connected" && status.awaitingFirstMessage === true;
     const firstMessage = $("telegram-first-message");
     firstMessage.hidden = !awaitingFirstMessage;
-    firstMessage.textContent = awaitingFirstMessage
-      ? "Abra o bot e envie uma mensagem privada do ID autorizado para vincular esta conversa."
-      : "";
+    text(firstMessage, () =>
+      awaitingFirstMessage
+        ? t(
+            "Abra o bot e envie uma mensagem privada do ID autorizado para vincular esta conversa.",
+          )
+        : "",
+    );
     const commandMenu = status.commandMenu;
     const commandMenuStatus = $("telegram-command-menu-status");
     const hasCommandMenuStatus = Boolean(
@@ -163,17 +193,22 @@ export function attachTelegramUI(
     commandMenuStatus.hidden = !hasCommandMenuStatus;
     if (hasCommandMenuStatus) {
       commandMenuStatus.dataset.state = commandMenu.state;
-      commandMenuStatus.textContent = commandMenu.message;
+      text(commandMenuStatus, () => t(commandMenu.message));
     } else {
       delete commandMenuStatus.dataset.state;
-      commandMenuStatus.textContent = "";
+      plain(commandMenuStatus, "");
     }
-    setStatusMessage(
+    setStatusMessage(() =>
       pendingConnectRetry
-        ? "A conexão pode ter sido iniciada. Tente novamente para consultar o mesmo pedido sem duplicar a conexão."
+        ? t(
+            "A conexão pode ter sido iniciada. Tente novamente para consultar o mesmo pedido sem duplicar a conexão.",
+          )
         : switchOutcomeUnknown
-          ? `Resultado da troca não confirmado. Status atual: ${labels[state] || state}. Inicie uma nova conexão apenas se quiser tentar novamente.`
-          : status.error || stateMessages[state] || "",
+          ? t(
+              "Resultado da troca não confirmado. Status atual: {0}. Inicie uma nova conexão apenas se quiser tentar novamente.",
+              [t(labels[state] || state)],
+            )
+          : errorText(status.error || "") || t(stateMessages[state] || ""),
     );
 
     const botUrl = safeBotUrl(status.bot);
@@ -186,16 +221,20 @@ export function attachTelegramUI(
       status.configured && (status.conversationId || status.conversationTitle),
     );
     $("telegram-linked").hidden = !linked;
-    $("telegram-linked-title").textContent =
-      status.conversationTitle || "Conversa sem título";
-    $("telegram-linked-id").textContent = status.conversationId
-      ? `ID ${status.conversationId}`
-      : "";
-    $("telegram-target-title").textContent =
-      currentConversationTitle || "Conversa atual";
-    $("telegram-target-id").textContent = currentConversationId
-      ? `ID ${currentConversationId}`
-      : "";
+    text(
+      $("telegram-linked-title"),
+      () => status.conversationTitle || t("Conversa sem título"),
+    );
+    text($("telegram-linked-id"), () =>
+      status.conversationId ? t("ID {0}", [status.conversationId]) : "",
+    );
+    text(
+      $("telegram-target-title"),
+      () => currentConversationTitle || t("Conversa atual"),
+    );
+    text($("telegram-target-id"), () =>
+      currentConversationId ? t("ID {0}", [currentConversationId]) : "",
+    );
 
     if (initial && !userIdTouched)
       userIdInput.value = status.userId ? String(status.userId) : "";
@@ -224,11 +263,13 @@ export function attachTelegramUI(
     try {
       await loadStatus(id);
       if (current(id) && switchOutcomeUnknown)
-        setStatusMessage(
-          "O resultado da troca não pôde ser confirmado. O status foi atualizado; para tentar novamente, inicie uma nova conexão e confirme a troca somente se o conflito continuar.",
+        setStatusMessage(() =>
+          t(
+            "O resultado da troca não pôde ser confirmado. O status foi atualizado; para tentar novamente, inicie uma nova conexão e confirme a troca somente se o conflito continuar.",
+          ),
         );
     } catch (error) {
-      if (current(id)) setFormError(error.message);
+      if (current(id)) setFormError(() => errorText(error.message));
     }
   }
 
@@ -238,7 +279,7 @@ export function attachTelegramUI(
       if (!current(id) || statusRequestSession === id || mutationInFlight)
         return;
       void loadStatus(id).catch((error) => {
-        if (current(id)) setFormError(error.message);
+        if (current(id)) setFormError(() => errorText(error.message));
       });
     }, 3000);
   }
@@ -250,7 +291,9 @@ export function attachTelegramUI(
       return null;
     }
     if (!currentConversationId) {
-      setFormError("Selecione uma conversa antes de conectar o Telegram.");
+      setFormError(() =>
+        t("Selecione uma conversa antes de conectar o Telegram."),
+      );
       return null;
     }
     const payload = {
@@ -272,8 +315,8 @@ export function attachTelegramUI(
   async function runConnect(payload, id, { isRetry = false } = {}) {
     mutationInFlight = true;
     setFormError("");
-    setStatusMessage(
-      isRetry ? "Repetindo a mesma solicitação…" : "Conectando…",
+    setStatusMessage(() =>
+      isRetry ? t("Repetindo a mesma solicitação…") : t("Conectando…"),
     );
     resetSubmitControls();
     try {
@@ -286,24 +329,30 @@ export function attachTelegramUI(
       if (status.state === "webhook_conflict") {
         // Keep the token only so the user can explicitly confirm the switch.
         setStatusMessage(
-          status.error ||
-            "Bot identificado. Um webhook existente impede o polling; revise os dados antes de confirmar a troca.",
+          () =>
+            errorText(status.error || "") ||
+            t(
+              "Bot identificado. Um webhook existente impede o polling; revise os dados antes de confirmar a troca.",
+            ),
         );
       } else {
         clearToken();
         setStatusMessage(
-          status.error ||
+          () =>
+            errorText(status.error || "") ||
             (status.state === "connected"
-              ? "Conexão com o Telegram concluída."
-              : stateMessages[status.state] || "Solicitação recebida."),
+              ? t("Conexão com o Telegram concluída.")
+              : t(stateMessages[status.state] || "Solicitação recebida.")),
         );
       }
     } catch (error) {
       if (!current(id)) return;
       if (error.status === undefined || error.status >= 500) {
         pendingConnectRetry = { payload };
-        setStatusMessage(
-          "Não foi possível confirmar o resultado. Uma nova tentativa usará a mesma solicitação para evitar duplicar a conexão.",
+        setStatusMessage(() =>
+          t(
+            "Não foi possível confirmar o resultado. Uma nova tentativa usará a mesma solicitação para evitar duplicar a conexão.",
+          ),
         );
         retryActions.hidden = false;
         setFormError("");
@@ -311,7 +360,7 @@ export function attachTelegramUI(
       } else {
         pendingConnectRetry = null;
         clearToken();
-        setFormError(error.message);
+        setFormError(() => errorText(error.message));
       }
     } finally {
       if (current(id)) {
@@ -342,7 +391,9 @@ export function attachTelegramUI(
       !conflict.webhookVersion ||
       !Number.isSafeInteger(conflict.bot?.id)
     ) {
-      setFormError("Atualize o status para confirmar os dados do webhook.");
+      setFormError(() =>
+        t("Atualize o status para confirmar os dados do webhook."),
+      );
       return;
     }
     if (!form.checkValidity()) {
@@ -358,7 +409,7 @@ export function attachTelegramUI(
     const id = session;
     mutationInFlight = true;
     setFormError("");
-    setStatusMessage("Trocando para polling…");
+    setStatusMessage(() => t("Trocando para polling…"));
     resetSubmitControls();
     try {
       const status = await api("/api/telegram/connect", "POST", payload);
@@ -368,12 +419,15 @@ export function attachTelegramUI(
       renderStatus(status);
       if (status.state !== "webhook_conflict") clearToken();
       setStatusMessage(
-        status.error ||
+        () =>
+          errorText(status.error || "") ||
           (status.state === "webhook_conflict"
-            ? "Bot identificado. Um webhook ainda impede o polling; revise o conflito antes de confirmar outra troca."
+            ? t(
+                "Bot identificado. Um webhook ainda impede o polling; revise o conflito antes de confirmar outra troca.",
+              )
             : status.state === "connected"
-              ? "Conexão com polling concluída."
-              : stateMessages[status.state] || "Solicitação recebida."),
+              ? t("Conexão com polling concluída.")
+              : t(stateMessages[status.state] || "Solicitação recebida.")),
       );
     } catch (error) {
       if (!current(id)) return;
@@ -381,12 +435,14 @@ export function attachTelegramUI(
       if (error.status === undefined || error.status >= 500) {
         switchOutcomeUnknown = true;
         conflictPanel.hidden = true;
-        setStatusMessage(
-          "Não foi possível confirmar a troca. O status será atualizado; se ainda houver conflito, inicie uma nova conexão antes de confirmar outra troca.",
+        setStatusMessage(() =>
+          t(
+            "Não foi possível confirmar a troca. O status será atualizado; se ainda houver conflito, inicie uma nova conexão antes de confirmar outra troca.",
+          ),
         );
         await refreshStatus(id);
       } else {
-        setFormError(error.message);
+        setFormError(() => errorText(error.message));
       }
     } finally {
       if (current(id)) {
@@ -402,7 +458,7 @@ export function attachTelegramUI(
     const id = session;
     mutationInFlight = true;
     setFormError("");
-    setStatusMessage("Desconectando…");
+    setStatusMessage(() => t("Desconectando…"));
     resetSubmitControls();
     try {
       const status = await api("/api/telegram/disconnect", "POST", {
@@ -413,17 +469,21 @@ export function attachTelegramUI(
       switchOutcomeUnknown = false;
       clearToken();
       renderStatus(status);
-      setStatusMessage(status.error || "Telegram desconectado.");
+      setStatusMessage(
+        () => errorText(status.error || "") || t("Telegram desconectado."),
+      );
     } catch (error) {
       if (!current(id)) return;
       clearToken();
       if (error.status === undefined || error.status >= 500) {
-        setStatusMessage(
-          "Não foi possível confirmar a desconexão. O status será atualizado.",
+        setStatusMessage(() =>
+          t(
+            "Não foi possível confirmar a desconexão. O status será atualizado.",
+          ),
         );
         await refreshStatus(id);
       } else {
-        setFormError(error.message);
+        setFormError(() => errorText(error.message));
       }
     } finally {
       if (current(id)) {
@@ -450,12 +510,12 @@ export function attachTelegramUI(
     tokenInput.required = true;
     userIdInput.value = "";
     setFormError("");
-    setStatusMessage("Carregando o estado da conexão…");
+    setStatusMessage(() => t("Carregando o estado da conexão…"));
     $("telegram-state").dataset.state = "connecting";
-    $("telegram-state").textContent = "Verificando";
-    $("telegram-bot").textContent = "Bot não identificado";
-    $("telegram-target-title").textContent = currentConversationTitle;
-    $("telegram-target-id").textContent = currentConversationId || "";
+    text($("telegram-state"), () => t("Verificando"));
+    text($("telegram-bot"), () => t("Bot não identificado"));
+    plain($("telegram-target-title"), currentConversationTitle);
+    plain($("telegram-target-id"), currentConversationId || "");
     retryActions.hidden = true;
     conflictPanel.hidden = true;
     if (!dialog.open) dialog.showModal();
@@ -463,7 +523,7 @@ export function attachTelegramUI(
     tokenInput.focus();
     void loadStatus(id, { initial: true })
       .catch((error) => {
-        if (current(id)) setFormError(error.message);
+        if (current(id)) setFormError(() => errorText(error.message));
       })
       .finally(() => {
         if (current(id)) startPolling(id);
@@ -500,7 +560,7 @@ export function attachTelegramUI(
     conflictDismissed = true;
     conflictPanel.hidden = true;
     clearToken();
-    setStatusMessage("Troca cancelada. O webhook atual foi mantido.");
+    setStatusMessage(() => t("Troca cancelada. O webhook atual foi mantido."));
   });
   disconnectButton.addEventListener("click", () => void disconnect());
   userIdInput.addEventListener("input", () => {

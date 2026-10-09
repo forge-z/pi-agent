@@ -8,6 +8,7 @@ interface Route {
 }
 
 function activeRoute(store: Store, conversationId: string): Route | undefined {
+  if (store.conversationDeleted(conversationId)) return;
   const saved = store.get<{ value: string }>(
     "SELECT value FROM meta WHERE key='telegram:connection'",
   );
@@ -124,6 +125,11 @@ export function taskTelegramAuthorized(
   chats: string[],
   botId?: number,
 ) {
+  const owner = store.get<{ conversationId: string }>(
+    "SELECT conversationId FROM delivery_conversations WHERE deliveryId=?",
+    deliveryId,
+  );
+  if (owner && store.conversationDeleted(owner.conversationId)) return false;
   const receipt = store.get<Route>(
     `SELECT n.* FROM task_notification_parts p JOIN task_notifications n ON n.id=p.notificationId
      WHERE p.deliveryId=?`,

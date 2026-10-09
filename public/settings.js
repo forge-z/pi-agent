@@ -1,3 +1,23 @@
+const { errorText, t, text, attr, plain, locale } = globalThis.PiI18n || {
+  errorText: (source) => source,
+  t: (source, values = []) =>
+    source.replace(/\{(\d+)\}/g, (match, index) =>
+      index < values.length ? String(values[index]) : match,
+    ),
+  text: (element, render) => {
+    element.textContent = typeof render === "function" ? render() : render;
+    return element;
+  },
+  attr: (element, name, render) =>
+    element.setAttribute(
+      name,
+      typeof render === "function" ? render() : render,
+    ),
+  plain: (element, value) => {
+    element.textContent = value;
+  },
+  locale: () => "pt-BR",
+};
 const $ = (id) => document.getElementById(id);
 const effortNames = {
   off: "Sem esforço",
@@ -70,6 +90,9 @@ function zonedSchedule(value, timezone) {
 
 export function configureUI(api, callbacks) {
   const { node, icon } = callbacks;
+  function uiNode(tag, render, cls) {
+    return text(node(tag, undefined, cls), render);
+  }
   let settings = null;
   let currentSettings = null;
   let servers = [];
@@ -88,7 +111,7 @@ export function configureUI(api, callbacks) {
   const taskRunRequests = new Map();
 
   function feedback(id, message = "") {
-    $(id).textContent = message;
+    text($(id), message);
   }
   async function act(errorId, controls, operation) {
     feedback(errorId);
@@ -102,7 +125,7 @@ export function configureUI(api, callbacks) {
     try {
       await operation();
     } catch (error) {
-      feedback(errorId, error.message);
+      text($(errorId), () => errorText(error.message));
       const feedbackId = {
         "settings-error": "settings-feedback",
         "mcp-editor-error": "mcp-editor-feedback",
@@ -118,7 +141,9 @@ export function configureUI(api, callbacks) {
     }
   }
   function option(value, label) {
-    const element = node("option", label);
+    const element = node("option");
+    if (typeof label === "function") text(element, label);
+    else plain(element, label);
     element.value = value;
     return element;
   }
@@ -129,7 +154,9 @@ export function configureUI(api, callbacks) {
     );
     const efforts = model?.efforts || [];
     select.replaceChildren(
-      ...efforts.map((effort) => option(effort, effortNames[effort] || effort)),
+      ...efforts.map((effort) =>
+        option(effort, () => t(effortNames[effort] || effort)),
+      ),
     );
     if (efforts.includes(preferred)) select.value = preferred;
     else if (efforts.includes("medium")) select.value = "medium";
@@ -152,11 +179,13 @@ export function configureUI(api, callbacks) {
     const model = settings?.models.find(
       (entry) => entry.id === currentSettings.modelId,
     );
-    $("model-label").textContent =
-      `${model?.name || currentSettings.modelId} · ${effortNames[currentSettings.effort] || currentSettings.effort}`;
-    $("model-label").setAttribute(
-      "aria-label",
-      `Ajustar modelo desta conversa: ${$("model-label").textContent}`,
+    text(
+      $("model-label"),
+      () =>
+        `${model?.name || currentSettings.modelId} · ${t(effortNames[currentSettings.effort] || currentSettings.effort)}`,
+    );
+    attr($("model-label"), "aria-label", () =>
+      t("Ajustar modelo desta conversa: {0}", [$("model-label").textContent]),
     );
   }
   async function loadSettings() {
@@ -173,7 +202,7 @@ export function configureUI(api, callbacks) {
   }
   $("settings-button").onclick = () => {
     show("settings-dialog");
-    feedback("settings-feedback", "Carregando suas configurações…");
+    feedback("settings-feedback", () => t("Carregando suas configurações…"));
     $("defaults-form").hidden = true;
     $("mcp-add").disabled = true;
     void act("settings-error", [], async () => {
@@ -206,9 +235,8 @@ export function configureUI(api, callbacks) {
       });
       await callbacks.refreshStatus();
       await loadSettings();
-      feedback(
-        "settings-feedback",
-        "Padrão salvo. As novas conversas usarão estas escolhas.",
+      feedback("settings-feedback", () =>
+        t("Padrão salvo. As novas conversas usarão estas escolhas."),
       );
     });
   };
@@ -246,7 +274,7 @@ export function configureUI(api, callbacks) {
   };
 
   function button(label, action, cls = "subtle") {
-    const element = node("button", label, cls);
+    const element = text(node("button", undefined, cls), label);
     element.type = "button";
     element.onclick = action;
     return element;
@@ -256,7 +284,7 @@ export function configureUI(api, callbacks) {
     const element = button(label, () => {
       if (!armed) {
         armed = true;
-        element.textContent = "Confirmar exclusão";
+        text(element, () => t("Confirmar exclusão"));
         element.classList.add("danger-button");
         return;
       }
@@ -265,7 +293,7 @@ export function configureUI(api, callbacks) {
     element.addEventListener("blur", () => {
       if (!element.disabled) {
         armed = false;
-        element.textContent = label;
+        text(element, label);
         element.classList.remove("danger-button");
       }
     });
@@ -299,33 +327,38 @@ export function configureUI(api, callbacks) {
       heading.append(icon("plug"), title);
       card.append(
         heading,
-        node(
+        uiNode(
           "p",
-          `${mode === "direct" ? "Integração automática" : "Modo de compatibilidade"} · ${mode === "legacy" ? `${server.readTools.length} leituras · ${server.actionTools.length} ações · ` : ""}${server.tokenFile ? "Token em arquivo" : server.hasToken ? "Token salvo" : "Sem token"}`,
+          () =>
+            `${mode === "direct" ? t("Integração automática") : t("Modo de compatibilidade")} · ${mode === "legacy" ? t("{0} leituras · {1} ações · ", [server.readTools.length, server.actionTools.length]) : ""}${server.tokenFile ? t("Token em arquivo") : server.hasToken ? t("Token salvo") : t("Sem token")}`,
           "card-meta",
         ),
       );
       if (Array.isArray(status?.tools))
         card.append(
-          node(
+          uiNode(
             "p",
-            `${status.tools.length} ferramentas registradas`,
+            () => t("{0} ferramentas registradas", [status.tools.length]),
             "card-meta",
           ),
         );
-      if (status?.error) card.append(node("p", status.error, "error"));
+      if (status?.error)
+        card.append(uiNode("p", () => errorText(status.error), "error"));
       const actions = node("div", undefined, "card-buttons");
       actions.append(
-        button("Editar", () => editServer(server)),
+        button(
+          () => t("Editar"),
+          () => editServer(server),
+        ),
         deletionButton(
-          "Excluir",
+          () => t("Excluir"),
           async () => {
             await saveServers(
               servers.filter((entry) => entry.name !== server.name).map(config),
             );
             if (editingName === server.name) closeEditor();
             discovered.delete(server.name);
-            feedback("settings-feedback", "Servidor excluído.");
+            feedback("settings-feedback", () => t("Servidor excluído."));
           },
           "settings-error",
         ),
@@ -337,9 +370,12 @@ export function configureUI(api, callbacks) {
       ...(cards.length
         ? cards
         : [
-            node(
+            uiNode(
               "p",
-              "Nenhum servidor conectado. Adicione um endpoint para começar.",
+              () =>
+                t(
+                  "Nenhum servidor conectado. Adicione um endpoint para começar.",
+                ),
               "management-empty",
             ),
           ]),
@@ -365,12 +401,27 @@ export function configureUI(api, callbacks) {
     const canMigrate = Boolean(editingName) && originalMode !== "direct";
     $("mcp-legacy-mode").hidden = !canMigrate;
     $("mcp-use-direct").checked = direct;
-    $("mcp-legacy-notice").textContent = direct
-      ? "Ao salvar, as ferramentas existentes passam a ser chamadas diretamente pelo Pi, mantendo a lista permitida atual."
-      : "Modo de compatibilidade. As listas de leitura e ação abaixo mantêm as permissões atuais.";
+    text($("mcp-legacy-notice"), () =>
+      direct
+        ? t(
+            "Ao salvar, as ferramentas existentes passam a ser chamadas diretamente pelo Pi, mantendo a lista permitida atual.",
+          )
+        : t(
+            "Modo de compatibilidade. As listas de leitura e ação abaixo mantêm as permissões atuais.",
+          ),
+    );
     $("mcp-direct-mode").hidden = !direct;
-    $("mcp-direct-notice").textContent =
-      `Ferramentas permitidas são chamadas diretamente pelo Pi. ${allowedTools === undefined ? "Todas ficam disponíveis por padrão; desmarque uma para bloqueá-la." : "Somente ferramentas na lista permitida ficam disponíveis; marque ou desmarque as ferramentas abaixo."}`;
+    text($("mcp-direct-notice"), () =>
+      t("Ferramentas permitidas são chamadas diretamente pelo Pi. {0}", [
+        allowedTools === undefined
+          ? t(
+              "Todas ficam disponíveis por padrão; desmarque uma para bloqueá-la.",
+            )
+          : t(
+              "Somente ferramentas na lista permitida ficam disponíveis; marque ou desmarque as ferramentas abaixo.",
+            ),
+      ]),
+    );
     $("mcp-legacy-permissions").hidden = direct || !editingName;
     $("mcp-legacy-permissions").open = !direct && Boolean(editingName);
   }
@@ -395,9 +446,9 @@ export function configureUI(api, callbacks) {
           : undefined;
     deniedTools = [...(server?.deniedTools || [])];
     deniedToolsPresent = Array.isArray(server?.deniedTools);
-    $("mcp-editor-title").textContent = server
-      ? `Editar ${server.name}`
-      : "Novo servidor";
+    text($("mcp-editor-title"), () =>
+      server ? t("Editar {0}", [server.name]) : t("Novo servidor"),
+    );
     $("mcp-name").value = server?.name || "";
     $("mcp-name").readOnly = Boolean(server);
     $("mcp-url").value = server?.url || "";
@@ -408,11 +459,15 @@ export function configureUI(api, callbacks) {
     $("mcp-action-tools").value = server?.actionTools?.join("\n") || "";
     $("mcp-remove-token-row").hidden =
       !server?.hasToken || Boolean(server?.tokenFile);
-    $("mcp-token-hint").textContent = server?.tokenFile
-      ? "Este servidor usa um arquivo de token provisionado pelo operador."
-      : server?.hasToken
-        ? "Um token já está salvo. Deixe vazio para preservá-lo; preencha para substituí-lo."
-        : "Opcional. O token salvo nunca é exibido aqui.";
+    text($("mcp-token-hint"), () =>
+      server?.tokenFile
+        ? t("Este servidor usa um arquivo de token provisionado pelo operador.")
+        : server?.hasToken
+          ? t(
+              "Um token já está salvo. Deixe vazio para preservá-lo; preencha para substituí-lo.",
+            )
+          : t("Opcional. O token salvo nunca é exibido aqui."),
+    );
     tools = discovered.get(editingName) || [];
     updateModePresentation();
     feedback("mcp-editor-error");
@@ -520,7 +575,7 @@ export function configureUI(api, callbacks) {
       async () => {
         const next = readEditor();
         const generation = requestGeneration;
-        feedback("mcp-editor-feedback", "Salvando servidor…");
+        feedback("mcp-editor-feedback", () => t("Salvando servidor…"));
         // Tokens never enter the redacted config cache or the DOM after saving.
         await saveServers([
           ...servers
@@ -545,24 +600,27 @@ export function configureUI(api, callbacks) {
         $("mcp-remove-token-row").hidden =
           Boolean(next.tokenFile) ||
           !servers.find((server) => server.name === editingName)?.hasToken;
-        $("mcp-token-hint").textContent =
-          "Deixe vazio para preservar o token salvo. Ele nunca é exibido aqui.";
-        $("mcp-editor-title").textContent = `Editar ${editingName}`;
+        text($("mcp-token-hint"), () =>
+          t(
+            "Deixe vazio para preservar o token salvo. Ele nunca é exibido aqui.",
+          ),
+        );
+        text($("mcp-editor-title"), () => t("Editar {0}", [editingName]));
         try {
           await discoverSavedTools(editingName, generation);
           if (generation !== requestGeneration) return;
-          feedback(
-            "mcp-editor-feedback",
+          feedback("mcp-editor-feedback", () =>
             tools.length
-              ? `Servidor salvo. ${tools.length} ferramentas atualizadas no catálogo.`
-              : "Servidor salvo. O catálogo não retornou ferramentas.",
+              ? t("Servidor salvo. {0} ferramentas atualizadas no catálogo.", [
+                  tools.length,
+                ])
+              : t("Servidor salvo. O catálogo não retornou ferramentas."),
           );
         } catch (error) {
           if (generation !== requestGeneration) return;
-          feedback("mcp-editor-error", error.message);
-          feedback(
-            "mcp-editor-feedback",
-            "Servidor salvo; não foi possível atualizar o catálogo.",
+          text($("mcp-editor-error"), () => errorText(error.message));
+          feedback("mcp-editor-feedback", () =>
+            t("Servidor salvo; não foi possível atualizar o catálogo."),
           );
         }
       },
@@ -602,17 +660,17 @@ export function configureUI(api, callbacks) {
             "Salve o servidor e as credenciais antes de descobrir as ferramentas.",
           );
         const generation = requestGeneration;
-        feedback(
-          "mcp-editor-feedback",
-          "Consultando as ferramentas deste servidor…",
+        feedback("mcp-editor-feedback", () =>
+          t("Consultando as ferramentas deste servidor…"),
         );
         await discoverSavedTools(saved.name, generation);
         if (generation !== requestGeneration) return;
-        feedback(
-          "mcp-editor-feedback",
+        feedback("mcp-editor-feedback", () =>
           tools.length
-            ? "Catálogo atualizado. Ajuste a disponibilidade abaixo e salve para aplicar."
-            : "O servidor não retornou ferramentas.",
+            ? t(
+                "Catálogo atualizado. Ajuste a disponibilidade abaixo e salve para aplicar.",
+              )
+            : t("O servidor não retornou ferramentas."),
         );
       },
     );
@@ -626,7 +684,7 @@ export function configureUI(api, callbacks) {
         if (tool.description) description.append(node("p", tool.description));
         const schema = node("details", undefined, "tool-schema");
         schema.append(
-          node("summary", "Parâmetros"),
+          uiNode("summary", () => t("Parâmetros")),
           node("pre", JSON.stringify(tool.inputSchema || {}, null, 2)),
         );
         description.append(schema);
@@ -640,7 +698,10 @@ export function configureUI(api, callbacks) {
             !deniedTools.includes(tool.name);
           checkbox.id = `tool-${index}-available`;
           choice.htmlFor = checkbox.id;
-          choice.append(checkbox, node("span", "Disponível"));
+          choice.append(
+            checkbox,
+            uiNode("span", () => t("Disponível")),
+          );
           checkbox.onchange = () => {
             if (checkbox.checked) {
               if (
@@ -671,15 +732,15 @@ export function configureUI(api, callbacks) {
   $("settings-dialog").addEventListener("close", closeEditor);
 
   function formatDate(timestamp, timezone) {
-    if (timestamp == null) return "Sem próxima execução";
+    if (timestamp == null) return t("Sem próxima execução");
     try {
-      return new Intl.DateTimeFormat("pt-BR", {
+      return new Intl.DateTimeFormat(locale(), {
         dateStyle: "short",
         timeStyle: "short",
         timeZone: timezone,
       }).format(timestamp);
     } catch {
-      return new Date(timestamp).toLocaleString("pt-BR");
+      return new Date(timestamp).toLocaleString(locale());
     }
   }
   async function loadTasks() {
@@ -699,21 +760,30 @@ export function configureUI(api, callbacks) {
     deliveryHintRequests.set(select, request);
     const selected = select.value;
     if (selected === "web") {
-      hint.textContent =
-        "Todo resultado fica na conversa web. Nenhuma cópia será enviada ao Telegram.";
+      text(hint, () =>
+        t(
+          "Todo resultado fica na conversa web. Nenhuma cópia será enviada ao Telegram.",
+        ),
+      );
       return true;
     }
     if (selected === "legacy") {
-      hint.textContent =
-        "Este agendamento preserva o comportamento anterior: envia ao Telegram quando há um vínculo autorizado.";
+      text(hint, () =>
+        t(
+          "Este agendamento preserva o comportamento anterior: envia ao Telegram quando há um vínculo autorizado.",
+        ),
+      );
       return true;
     }
     if (!conversationId) {
-      hint.textContent =
-        "Escolha uma conversa vinculada ao Telegram para habilitar essa cópia.";
+      text(hint, () =>
+        t(
+          "Escolha uma conversa vinculada ao Telegram para habilitar essa cópia.",
+        ),
+      );
       return false;
     }
-    hint.textContent = "Verificando o vínculo desta conversa…";
+    text(hint, () => t("Verificando o vínculo desta conversa…"));
     try {
       const available = await telegramAvailable(conversationId);
       if (
@@ -721,22 +791,31 @@ export function configureUI(api, callbacks) {
         deliveryHintRequests.get(select) !== request
       )
         return false;
-      hint.textContent = available
-        ? "O resultado também será enviado ao Telegram desta conversa enquanto o vínculo autorizado permanecer ativo."
-        : "Telegram não está conectado e autorizado para esta conversa. Conecte o bot e vincule a conversa escolhida; o resultado continuará disponível na web.";
+      text(hint, () =>
+        available
+          ? t(
+              "O resultado também será enviado ao Telegram desta conversa enquanto o vínculo autorizado permanecer ativo.",
+            )
+          : t(
+              "Telegram não está conectado e autorizado para esta conversa. Conecte o bot e vincule a conversa escolhida; o resultado continuará disponível na web.",
+            ),
+      );
       return available;
     } catch {
       if (
         select.value === selected &&
         deliveryHintRequests.get(select) === request
       )
-        hint.textContent =
-          "Não foi possível verificar o vínculo agora. A seleção será validada ao salvar; o resultado permanece na conversa web.";
+        text(hint, () =>
+          t(
+            "Não foi possível verificar o vínculo agora. A seleção será validada ao salvar; o resultado permanece na conversa web.",
+          ),
+        );
       return false;
     }
   }
   async function openTasks() {
-    feedback("tasks-feedback", "Carregando suas tarefas…");
+    feedback("tasks-feedback", () => t("Carregando suas tarefas…"));
     await callbacks.loadConversations();
     const conversations = callbacks.getConversations();
     $("task-conversation").replaceChildren(
@@ -784,16 +863,21 @@ export function configureUI(api, callbacks) {
       const title = node("div");
       title.append(
         node("h4", task.title),
-        node(
+        uiNode(
           "p",
-          task.kind === "once" ? "Uma vez" : `Cron · ${task.schedule}`,
+          () =>
+            task.kind === "once" ? t("Uma vez") : `Cron · ${task.schedule}`,
           "card-meta",
         ),
       );
       heading.append(
         icon("calendar-blank"),
         title,
-        node("span", task.enabled ? "Ativa" : "Pausada", "task-state"),
+        uiNode(
+          "span",
+          () => (task.enabled ? t("Ativa") : t("Pausada")),
+          "task-state",
+        ),
       );
       const conversation = callbacks
         .getConversations()
@@ -801,9 +885,10 @@ export function configureUI(api, callbacks) {
       card.append(
         heading,
         node("p", task.prompt, "task-prompt"),
-        node(
+        uiNode(
           "p",
-          `Conversa: ${conversation?.title || task.conversationId}`,
+          () =>
+            t("Conversa: {0}", [conversation?.title || task.conversationId]),
           "card-meta",
         ),
       );
@@ -814,15 +899,22 @@ export function configureUI(api, callbacks) {
           web: "Somente nesta conversa web",
           web_telegram: "Conversa web e Telegram",
         }[task.delivery] || "Destino desconhecido";
-      card.append(node("p", `Destino: ${deliveryLabel}`, "card-meta"));
       card.append(
-        node(
+        uiNode("p", () => t("Destino: {0}", [t(deliveryLabel)]), "card-meta"),
+      );
+      card.append(
+        uiNode(
           "p",
-          `Próxima: ${formatDate(task.nextRun, task.timezone)} · ${task.timezone}`,
+          () =>
+            t("Próxima: {0} · {1}", [
+              formatDate(task.nextRun, task.timezone),
+              task.timezone,
+            ]),
           "card-meta",
         ),
       );
-      if (task.lastError) card.append(node("p", task.lastError, "error"));
+      if (task.lastError)
+        card.append(uiNode("p", () => errorText(task.lastError), "error"));
       const actions = node("div", undefined, "card-buttons");
       const editorId = `task-delivery-${task.id}`;
       const editor = node(
@@ -832,18 +924,17 @@ export function configureUI(api, callbacks) {
       );
       editor.hidden = true;
       const field = node("div", undefined, "form-field");
-      const label = node("label", "Destino do resultado");
+      const label = uiNode("label", () => t("Destino do resultado"));
       label.htmlFor = editorId;
       const editorSelect = node("select");
       editorSelect.id = editorId;
       editorSelect.replaceChildren(
-        option("web", "Somente nesta conversa web"),
-        option("web_telegram", "Conversa web e Telegram"),
+        option("web", () => t("Somente nesta conversa web")),
+        option("web_telegram", () => t("Conversa web e Telegram")),
         ...(task.delivery === "legacy"
           ? [
-              option(
-                "legacy",
-                "Telegram quando houver vínculo (comportamento atual)",
+              option("legacy", () =>
+                t("Telegram quando houver vínculo (comportamento atual)"),
               ),
             ]
           : []),
@@ -856,13 +947,16 @@ export function configureUI(api, callbacks) {
       editorError.id = `task-delivery-error-${task.id}`;
       editorError.setAttribute("role", "alert");
       const editorActions = node("div", undefined, "form-actions");
-      const saveDelivery = node("button", "Salvar destino");
+      const saveDelivery = uiNode("button", () => t("Salvar destino"));
       saveDelivery.type = "submit";
-      const cancelDelivery = button("Cancelar", () => {
-        editor.hidden = true;
-        editorSelect.value = task.delivery;
-        editorError.textContent = "";
-      });
+      const cancelDelivery = button(
+        () => t("Cancelar"),
+        () => {
+          editor.hidden = true;
+          editorSelect.value = task.delivery;
+          plain(editorError, "");
+        },
+      );
       editorActions.append(saveDelivery, cancelDelivery);
       editor.append(field, editorError, editorActions);
       editorSelect.onchange = () =>
@@ -885,67 +979,79 @@ export function configureUI(api, callbacks) {
             delivery: editorSelect.value,
           });
           await loadTasks();
-          feedback("tasks-feedback", "Destino da tarefa atualizado.");
+          feedback("tasks-feedback", () => t("Destino da tarefa atualizado."));
         });
       };
-      const editDelivery = button("Editar destino", () => {
-        editor.hidden = !editor.hidden;
-        if (editor.hidden) return;
-        editorSelect.value = task.delivery;
-        void updateTaskDeliveryHint(
-          editorSelect,
-          task.conversationId,
-          editorHint,
-        );
-      });
-      const pause = button(task.enabled ? "Pausar" : "Retomar", () => {
-        void act("tasks-error", [pause], async () => {
-          await api(`/api/tasks/${encodeURIComponent(task.id)}`, "PUT", {
-            enabled: !task.enabled,
-          });
-          await loadTasks();
-          feedback(
-            "tasks-feedback",
-            task.enabled ? "Tarefa pausada." : "Tarefa retomada.",
-          );
-        });
-      });
-      const run = button("Executar agora", () => {
-        void act("tasks-error", [run, pause], async () => {
-          if (!taskRunRequests.has(task.id))
-            taskRunRequests.set(task.id, crypto.randomUUID());
-          await api(`/api/tasks/${encodeURIComponent(task.id)}/run`, "POST", {
-            requestId: taskRunRequests.get(task.id),
-          });
-          await loadTasks();
-          await callbacks.refreshConversation(task.conversationId);
-          taskRunRequests.delete(task.id);
-          feedback(
-            "tasks-feedback",
-            "Execução solicitada. Acompanhe o resultado e eventuais aprovações na conversa.",
-          );
-        });
-      });
-      const open = button("Abrir conversa", async () => {
-        void act("tasks-error", [open], async () => {
-          await callbacks.selectConversation(
+      const editDelivery = button(
+        () => t("Editar destino"),
+        () => {
+          editor.hidden = !editor.hidden;
+          if (editor.hidden) return;
+          editorSelect.value = task.delivery;
+          void updateTaskDeliveryHint(
+            editorSelect,
             task.conversationId,
-            conversation?.title || "Conversa da tarefa",
+            editorHint,
           );
-          $("tasks-dialog").close();
-        });
-      });
+        },
+      );
+      const pause = button(
+        () => (task.enabled ? t("Pausar") : t("Retomar")),
+        () => {
+          void act("tasks-error", [pause], async () => {
+            await api(`/api/tasks/${encodeURIComponent(task.id)}`, "PUT", {
+              enabled: !task.enabled,
+            });
+            await loadTasks();
+            feedback("tasks-feedback", () =>
+              task.enabled ? t("Tarefa pausada.") : t("Tarefa retomada."),
+            );
+          });
+        },
+      );
+      const run = button(
+        () => t("Executar agora"),
+        () => {
+          void act("tasks-error", [run, pause], async () => {
+            if (!taskRunRequests.has(task.id))
+              taskRunRequests.set(task.id, crypto.randomUUID());
+            await api(`/api/tasks/${encodeURIComponent(task.id)}/run`, "POST", {
+              requestId: taskRunRequests.get(task.id),
+            });
+            await loadTasks();
+            await callbacks.refreshConversation(task.conversationId);
+            taskRunRequests.delete(task.id);
+            feedback("tasks-feedback", () =>
+              t(
+                "Execução solicitada. Acompanhe o resultado e eventuais aprovações na conversa.",
+              ),
+            );
+          });
+        },
+      );
+      const open = button(
+        () => t("Abrir conversa"),
+        async () => {
+          void act("tasks-error", [open], async () => {
+            await callbacks.selectConversation(
+              task.conversationId,
+              conversation?.title || "Conversa da tarefa",
+            );
+            $("tasks-dialog").close();
+          });
+        },
+      );
       actions.append(
         open,
         editDelivery,
         pause,
         run,
         deletionButton(
-          "Excluir",
+          () => t("Excluir"),
           async () => {
             await api(`/api/tasks/${encodeURIComponent(task.id)}`, "DELETE");
             await loadTasks();
-            feedback("tasks-feedback", "Tarefa excluída.");
+            feedback("tasks-feedback", () => t("Tarefa excluída."));
           },
           "tasks-error",
         ),
@@ -956,14 +1062,16 @@ export function configureUI(api, callbacks) {
       const historyError = node("p", undefined, "error");
       historyError.setAttribute("role", "alert");
       history.append(
-        node("summary", "Histórico de execuções"),
+        uiNode("summary", () => t("Histórico de execuções")),
         log,
         historyError,
       );
       let loaded = false;
       history.ontoggle = async () => {
         if (!history.open || loaded) return;
-        log.replaceChildren(node("p", "Carregando execuções…", "card-meta"));
+        log.replaceChildren(
+          uiNode("p", () => t("Carregando execuções…"), "card-meta"),
+        );
         try {
           const runs = await api(
             `/api/tasks/${encodeURIComponent(task.id)}/runs`,
@@ -979,20 +1087,30 @@ export function configureUI(api, callbacks) {
                       failed: "Falhou",
                     }[entry.state] || entry.state;
                   item.append(
-                    node(
+                    uiNode(
                       "p",
-                      `${formatDate(entry.scheduledAt, task.timezone)} · ${state}`,
+                      () =>
+                        `${formatDate(entry.scheduledAt, task.timezone)} · ${t(state)}`,
                     ),
                   );
-                  if (entry.error) item.append(node("p", entry.error, "error"));
+                  if (entry.error)
+                    item.append(
+                      uiNode("p", () => errorText(entry.error), "error"),
+                    );
                   return item;
                 })
-              : [node("p", "Nenhuma execução registrada.", "card-meta")]),
+              : [
+                  uiNode(
+                    "p",
+                    () => t("Nenhuma execução registrada."),
+                    "card-meta",
+                  ),
+                ]),
           );
           loaded = true;
         } catch (error) {
           log.replaceChildren();
-          historyError.textContent = error.message;
+          text(historyError, () => errorText(error.message));
         }
       };
       card.append(history);
@@ -1002,9 +1120,10 @@ export function configureUI(api, callbacks) {
       ...(cards.length
         ? cards
         : [
-            node(
+            uiNode(
               "p",
-              "Ainda não há tarefas. Combine o primeiro pedido abaixo.",
+              () =>
+                t("Ainda não há tarefas. Combine o primeiro pedido abaixo."),
               "management-empty",
             ),
           ]),
@@ -1022,7 +1141,7 @@ export function configureUI(api, callbacks) {
     void act("task-form-error", [event.submitter], async () => {
       const timezone = $("task-timezone").value.trim();
       try {
-        new Intl.DateTimeFormat("pt-BR", { timeZone: timezone }).format();
+        new Intl.DateTimeFormat(locale(), { timeZone: timezone }).format();
       } catch {
         throw new Error(
           "Use um fuso horário IANA válido, como America/Sao_Paulo.",
@@ -1055,9 +1174,8 @@ export function configureUI(api, callbacks) {
         $("task-delivery-hint"),
       );
       await loadTasks();
-      feedback(
-        "tasks-feedback",
-        "Tarefa criada. O pedido será executado na conversa escolhida.",
+      feedback("tasks-feedback", () =>
+        t("Tarefa criada. O pedido será executado na conversa escolhida."),
       );
     });
   };

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
+import { interfaceLanguage } from "./interface-fixture.js";
 import { test } from "node:test";
 
 class Element {
@@ -279,7 +280,11 @@ test("the chat renderer applies the preference to history and live updates while
     element.className = className;
     return element;
   };
+  const i18n = interfaceLanguage().i18n;
   runInNewContext(appSource.slice(start, end), {
+    ...i18n,
+    uiNode: (tag: string, render: () => string, className = "") =>
+      i18n.text(node(tag, undefined, className), render),
     snapshot,
     historyWindow: runInNewContext(
       readFileSync(

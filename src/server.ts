@@ -7,7 +7,7 @@ import { randomBytes, timingSafeEqual } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { Runtime } from "./runtime.js";
+import { ConversationError, type Runtime } from "./runtime.js";
 import { hash, SqlCredentials } from "./store.js";
 import { ProviderLogin } from "./provider-login.js";
 import type { Telegram, TelegramUpdate } from "./telegram.js";
@@ -267,7 +267,7 @@ export function createAppServer(app: Runtime, options: ServerOptions) {
             return json(
               response,
               200,
-              app.store.all("SELECT * FROM conversations ORDER BY rowid DESC"),
+              app.listConversations(url.searchParams.get("deleted") === "1"),
             );
           if (method === "POST") {
             const input = await body(request);
@@ -375,12 +375,31 @@ export function createAppServer(app: Runtime, options: ServerOptions) {
             throw new HttpError(404, "Recibo de comando não encontrado");
           return json(response, 200, receipt);
         }
+        const restoreRoute = /^\/api\/conversations\/([0-9]+)\/restore$/.exec(
+          path,
+        );
+        if (restoreRoute && method === "POST")
+          return json(response, 200, app.restoreConversation(restoreRoute[1]));
         const route =
           /^\/api\/conversations\/([0-9]+)(?:\/(messages|events|link|actions|settings)(?:\/([a-f0-9]{24}))?)?$/.exec(
             path,
           );
         if (route) {
           const [, id, resource, actionId] = route;
+          if (!resource && method === "PUT")
+            return json(
+              response,
+              200,
+              app.renameConversation(id, (await body(request)).title),
+            );
+          if (!resource && method === "DELETE") {
+            if ((await body(request)).confirm !== true)
+              throw new HttpError(
+                400,
+                "Confirme explicitamente a exclusão da conversa.",
+              );
+            return json(response, 200, await app.deleteConversation(id));
+          }
           await app.conversation(id);
           if (!resource && method === "GET")
             return json(response, 200, await app.snapshot(id));
@@ -514,6 +533,7 @@ export function createAppServer(app: Runtime, options: ServerOptions) {
         "/": ["index.html", "text/html"],
         "/app.js": ["app.js", "text/javascript"],
         "/commands.js": ["commands.js", "text/javascript"],
+        "/conversations.js": ["conversations.js", "text/javascript"],
         "/markdown.js": ["markdown.js", "text/javascript"],
         "/marked.js": [
           fileURLToPath(import.meta.resolve("marked")),
@@ -531,6 +551,8 @@ export function createAppServer(app: Runtime, options: ServerOptions) {
         "/sw.js": ["sw.js", "text/javascript"],
         "/icon.svg": ["icon.svg", "image/svg+xml"],
         "/theme.js": ["theme.js", "text/javascript"],
+        "/i18n.js": ["i18n.js", "text/javascript"],
+        "/i18n-catalog.js": ["i18n-catalog.js", "text/javascript"],
         "/icons.svg": ["icons.svg", "image/svg+xml"],
         "/pi-logo.svg": ["pi-logo.svg", "image/svg+xml"],
         "/fonts/dm-sans-400-normal.ttf": [
@@ -568,13 +590,17 @@ export function createAppServer(app: Runtime, options: ServerOptions) {
         response.end();
         return;
       }
-      const status = error instanceof HttpError ? error.status : 400;
+      const status =
+        error instanceof HttpError || error instanceof ConversationError
+          ? error.status
+          : 400;
       json(response, status, {
         error:
           error instanceof HttpError ||
           error instanceof SettingsError ||
           error instanceof CommandError ||
           error instanceof TaskError ||
+          error instanceof ConversationError ||
           error instanceof PolicyError ||
           error instanceof McpError ||
           error instanceof TelegramSetupError

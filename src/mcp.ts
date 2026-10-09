@@ -1,6 +1,7 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
+import { AjvJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/ajv";
 import {
   ElicitRequestSchema,
   CallToolResultSchema,
@@ -88,6 +89,16 @@ export class McpGateway implements ToolGateway {
   private clients = new Map<string, Promise<Client>>();
   private bindings = new WeakMap<Client, string>();
   private expired = new WeakSet<Client>();
+  private metadata = new WeakMap<
+    Client,
+    Map<
+      string,
+      {
+        taskRequired: boolean;
+        validateOutput?: ReturnType<AjvJsonSchemaValidator["getValidator"]>;
+      }
+    >
+  >();
   private operations = 0;
   private tails = new Map<string, Promise<unknown>>();
   private active = new Map<string, McpCallOptions>();
@@ -258,6 +269,89 @@ export class McpGateway implements ToolGateway {
       this.clients.delete(server);
     await client.close().catch(() => {});
   }
+  private async listClientTools(client: Client, signal?: AbortSignal) {
+    const tools = new Map<string, Tool>();
+    const cursors = new Set<string>();
+    let cursor: string | undefined;
+    do {
+      let page;
+      try {
+        page = await client.listTools(cursor ? { cursor } : undefined, {
+          timeout: 30000,
+          signal,
+        });
+      } catch (error) {
+        // A server that already returned a page supports discovery. A missing
+        // continuation must never trigger the legacy call-only fallback.
+        if (
+          cursor &&
+          error &&
+          typeof error === "object" &&
+          "code" in error &&
+          error.code === -32601
+        )
+          throw new McpError("Servidor MCP não concluiu o catálogo paginado.");
+        throw error;
+      }
+      for (const tool of page.tools) tools.set(tool.name, tool);
+      cursor = page.nextCursor;
+      if (cursor && cursors.has(cursor))
+        throw new McpError("Servidor MCP repetiu o cursor de descoberta");
+      if (cursor) cursors.add(cursor);
+      if (tools.size > 2000 || cursors.size > 100)
+        throw new McpError("Catálogo MCP excedeu o limite de descoberta");
+    } while (cursor);
+    // The SDK keeps metadata only from its last listTools page. Preserve the
+    // entire catalog using public APIs, including after a client is replaced.
+    const validator = new AjvJsonSchemaValidator();
+    this.metadata.set(
+      client,
+      new Map(
+        [...tools.values()].map((tool) => [
+          tool.name,
+          {
+            taskRequired: tool.execution?.taskSupport === "required",
+            validateOutput: tool.outputSchema
+              ? validator.getValidator(tool.outputSchema)
+              : undefined,
+          },
+        ]),
+      ),
+    );
+    return [...tools.values()];
+  }
+  private async liveClient(server: string, signal?: AbortSignal) {
+    for (let attempt = 0; ; attempt++) {
+      const client = await this.client(server);
+      try {
+        // Probe before sending any tool. Discovery is safe to retry when an
+        // idle session expires. Refresh every page so output validation and
+        // task restrictions also survive a replacement.
+        await this.listClientTools(client, signal);
+        return client;
+      } catch (error) {
+        if (this.expired.has(client)) {
+          await this.discard(server, client);
+          if (attempt === 0 && !signal?.aborted) continue;
+          throw new McpSessionError(
+            "A sessão MCP expirou novamente antes do envio. Verifique a disponibilidade do servidor.",
+          );
+        }
+        // Legacy configurations historically allow tools/call without discovery.
+        // Preserve that only for an explicit JSON-RPC method-not-found response.
+        if (
+          this.config.find((config) => config.name === server)?.mode !==
+            "direct" &&
+          error &&
+          typeof error === "object" &&
+          "code" in error &&
+          error.code === -32601
+        )
+          return client;
+        throw error;
+      }
+    }
+  }
   private async invoke(
     server: string,
     tool: string,
@@ -273,7 +367,7 @@ export class McpGateway implements ToolGateway {
             throw new McpNotSentError("Chamada MCP cancelada antes do envio.");
           let client: Client;
           try {
-            client = await this.client(server);
+            client = await this.liveClient(server, options.signal);
           } catch (error) {
             const safe = error instanceof McpError ? error : safeError(error);
             throw new McpNotSentError(
@@ -286,16 +380,33 @@ export class McpGateway implements ToolGateway {
             );
           if (options.signal?.aborted)
             throw new McpNotSentError("Chamada MCP cancelada antes do envio.");
+          const metadata = this.metadata.get(client)?.get(tool);
+          if (metadata?.taskRequired)
+            throw new McpNotSentError(
+              "Ferramenta MCP exige execução baseada em tarefas, não suportada nesta conexão. Nenhuma chamada de ferramenta foi enviada.",
+            );
           this.active.set(server, options);
           try {
+            // A session can still end after the probe. Once callTool starts,
+            // any failure remains uncertain and effects must never be replayed.
             const result = await client.callTool(
               { name: tool, arguments: args },
               undefined,
               { timeout: 300000, signal: options.signal },
             );
-            return CallToolResultSchema.parse(
+            const parsed = CallToolResultSchema.parse(
               "toolResult" in result ? result.toolResult : result,
             );
+            if (
+              metadata?.validateOutput &&
+              ((!parsed.structuredContent && !parsed.isError) ||
+                (parsed.structuredContent &&
+                  !metadata.validateOutput(parsed.structuredContent).valid))
+            )
+              throw new McpError(
+                "Resposta MCP incompatível com o schema de saída da ferramenta. O resultado da chamada pode ser incerto.",
+              );
+            return parsed;
           } catch (error) {
             if (this.expired.has(client)) {
               await this.discard(server, client);
@@ -307,7 +418,7 @@ export class McpGateway implements ToolGateway {
                 "A sessão MCP expirou ou foi encerrada (HTTP 404). A chamada não foi reenviada; verifique o resultado no serviço. A próxima operação abrirá uma nova sessão.",
               );
             }
-            throw safeError(error);
+            throw error instanceof McpError ? error : safeError(error);
           } finally {
             this.active.delete(server);
           }
@@ -362,10 +473,18 @@ export class McpGateway implements ToolGateway {
           return client;
         };
         let client = makeClient();
+        let legacyTransport = false;
+        let connected = false;
         const limitedFetch: typeof fetch = async (input, init) => {
           const requestClient = client;
+          const establishedSsePost =
+            legacyTransport && connected && init?.method === "POST";
           const controller = new AbortController();
-          const timer = setTimeout(() => controller.abort(), 30000);
+          // Tool calls (and their elicitation replies) use the same five-minute
+          // budget as callTool. Discovery and connection setup stay bounded at 30s.
+          const timeout =
+            this.active.has(server) && init?.method === "POST" ? 300000 : 30000;
+          const timer = setTimeout(() => controller.abort(), timeout);
           try {
             const response = await fetch(input, {
               ...init,
@@ -374,11 +493,13 @@ export class McpGateway implements ToolGateway {
                 ...(init?.signal ? [init.signal] : []),
               ]),
             });
-            // HTTP 404 with a session header means the session was terminated,
-            // not that the configured endpoint is wrong (MCP transport spec).
+            // Streamable HTTP identifies sessions in a header; legacy SSE
+            // advertises a POST endpoint tied to its stream, often in a query.
+            // Only classify SSE POST failures after initialization completed.
             if (
               response.status === 404 &&
-              new Headers(init?.headers).has("mcp-session-id")
+              (new Headers(init?.headers).has("mcp-session-id") ||
+                establishedSsePost)
             )
               this.expired.add(requestClient);
             return response;
@@ -407,6 +528,7 @@ export class McpGateway implements ToolGateway {
               );
             if (code !== 404 && code !== 405) throw error;
             client = makeClient();
+            legacyTransport = true;
             await client.connect(
               new SSEClientTransport(new URL(config.url), {
                 requestInit: { headers },
@@ -415,6 +537,7 @@ export class McpGateway implements ToolGateway {
               { timeout: 30000 },
             );
           }
+          connected = true;
           client.onclose = () => {
             if (this.clients.get(server) === pending)
               this.clients.delete(server);
@@ -481,25 +604,7 @@ export class McpGateway implements ToolGateway {
       for (let attempt = 0; ; attempt++) {
         const client = await this.client(server);
         try {
-          const tools = new Map<string, Tool>();
-          const cursors = new Set<string>();
-          let cursor: string | undefined;
-          do {
-            const page = await client.listTools(
-              cursor ? { cursor } : undefined,
-              {
-                timeout: 30000,
-              },
-            );
-            for (const tool of page.tools) tools.set(tool.name, tool);
-            cursor = page.nextCursor;
-            if (cursor && cursors.has(cursor))
-              throw new McpError("Servidor MCP repetiu o cursor de descoberta");
-            if (cursor) cursors.add(cursor);
-            if (tools.size > 2000 || cursors.size > 100)
-              throw new McpError("Catálogo MCP excedeu o limite de descoberta");
-          } while (cursor);
-          return [...tools.values()];
+          return await this.listClientTools(client);
         } catch (error) {
           if (this.expired.has(client)) {
             await this.discard(server, client);

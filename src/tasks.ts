@@ -125,6 +125,12 @@ export class Tasks {
       CREATE TABLE IF NOT EXISTS task_run_keys(requestId TEXT PRIMARY KEY, runId TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS task_creations(creationKey TEXT PRIMARY KEY, taskId TEXT NOT NULL, input TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS task_delivery_changes(changeKey TEXT PRIMARY KEY,taskId TEXT NOT NULL,delivery TEXT NOT NULL,result TEXT NOT NULL);
+      CREATE TRIGGER IF NOT EXISTS archived_task_insert BEFORE INSERT ON tasks
+      WHEN EXISTS (SELECT 1 FROM conversation_lifecycle WHERE conversationId=NEW.conversationId AND deletedAt IS NOT NULL)
+      BEGIN SELECT RAISE(ABORT,'Conversa excluída'); END;
+      CREATE TRIGGER IF NOT EXISTS archived_task_enable BEFORE UPDATE OF enabled ON tasks
+      WHEN NEW.enabled=1 AND EXISTS (SELECT 1 FROM conversation_lifecycle WHERE conversationId=NEW.conversationId AND deletedAt IS NOT NULL)
+      BEGIN SELECT RAISE(ABORT,'Conversa excluída'); END;
     `);
     if (
       !runtime.store
@@ -243,6 +249,10 @@ export class Tasks {
           "Telegram não está conectado e autorizado para esta conversa. Conecte o bot e vincule a conversa escolhida.",
         );
       const id = randomUUID();
+      if (this.runtime.store.conversationDeleted(conversationId))
+        throw new TaskError(
+          "Conversa excluída. Recupere-a antes de criar uma tarefa.",
+        );
       this.runtime.store.db.exec("BEGIN IMMEDIATE");
       try {
         this.runtime.store.run(
@@ -325,6 +335,10 @@ export class Tasks {
     if (Object.keys(data).some((key) => !["enabled", "delivery"].includes(key)))
       throw new TaskError("Campo de atualização inválido");
     const task = this.require(id);
+    if (this.runtime.store.conversationDeleted(task.conversationId))
+      throw new TaskError(
+        "Conversa excluída. Recupere-a antes de alterar a tarefa.",
+      );
     const enabled = data.enabled ?? task.enabled;
     if (typeof enabled !== "boolean")
       throw new TaskError("enabled deve ser booleano");
@@ -390,7 +404,8 @@ export class Tasks {
   }
   runNow(id: string, requestId?: string): Promise<TaskRun> {
     return this.serialize(async () => {
-      this.require(id);
+      const task = this.require(id);
+      await this.runtime.conversation(task.conversationId);
       if (
         requestId !== undefined &&
         (typeof requestId !== "string" || !/^[\w:.-]{1,160}$/.test(requestId))
@@ -416,7 +431,7 @@ export class Tasks {
       this.refresh();
       const now = this.clock();
       for (const task of this.runtime.store.all<TaskRow>(
-        "SELECT * FROM tasks WHERE deleted=0 AND enabled=1 AND nextRun<=? ORDER BY nextRun",
+        "SELECT * FROM tasks WHERE deleted=0 AND enabled=1 AND nextRun<=? AND conversationId NOT IN (SELECT conversationId FROM conversation_lifecycle WHERE deletedAt IS NOT NULL) ORDER BY nextRun",
         now,
       ))
         this.claim(task.id, now, true);
@@ -440,6 +455,8 @@ export class Tasks {
         "SELECT * FROM tasks WHERE id=? AND deleted=0",
         id,
       );
+      if (task && store.conversationDeleted(task.conversationId))
+        throw new TaskError("Conversa excluída");
       const pending = store.get<TaskRun>(
         "SELECT * FROM task_runs WHERE taskId=? AND state='pending'",
         id,

@@ -22,6 +22,8 @@
       crossorigin
     />
     <script src="/theme.js"></script>
+    <script defer src="/i18n-catalog.js"></script>
+    <script defer src="/i18n.js"></script>
     <link rel="stylesheet" href="/style.css" />
     <title>Pi · Assistente pessoal</title>
     <script type="module" src="/app.js"></script>
@@ -232,8 +234,17 @@
           /><span class="sr-only">Buscar conversas</span></label
         >
         <div class="section-label">
-          <span>SUAS CONVERSAS</span><span id="conversation-count"></span>
+          <span id="conversation-list-heading">SUAS CONVERSAS</span
+          ><span id="conversation-count"></span>
         </div>
+        <button
+          id="toggle-deleted-conversations"
+          class="subtle sidebar-view-toggle"
+          type="button"
+          aria-pressed="false"
+        >
+          Conversas excluídas
+        </button>
         <nav id="conversations" aria-label="Conversas"></nav>
         <p id="search-empty" class="search-empty" hidden>
           Nenhuma conversa encontrada.
@@ -565,6 +576,73 @@
       </main>
     </div>
     <dialog
+      id="conversation-management-dialog"
+      class="management-dialog conversation-management-dialog"
+      aria-labelledby="conversation-management-title"
+    >
+      <form method="dialog">
+        <button
+          class="dialog-close icon-button"
+          id="conversation-management-close"
+          aria-label="Fechar gerenciamento da conversa"
+        >
+          <svg class="icon" aria-hidden="true"><use href="/icons.svg#x" /></svg>
+        </button>
+      </form>
+      <p class="eyebrow">GERENCIAR CONVERSA</p>
+      <h2 id="conversation-management-title">Renomear conversa</h2>
+      <p id="conversation-management-intro" class="management-intro">
+        Escolha um título de até 100 caracteres.
+      </p>
+      <form id="conversation-management-form" class="management-form">
+        <div id="conversation-management-rename-fields" class="form-field">
+          <label for="conversation-management-name">Título</label>
+          <input
+            id="conversation-management-name"
+            type="text"
+            maxlength="100"
+            required
+            autocomplete="off"
+          />
+        </div>
+        <div id="conversation-management-delete-fields" hidden>
+          <p>
+            Você poderá restaurar a conversa pela lista de conversas excluídas.
+            A restauração não reativa tarefas nem vincula o Telegram.
+          </p>
+          <label
+            class="checkbox-line"
+            for="conversation-management-confirm-delete"
+          >
+            <input
+              id="conversation-management-confirm-delete"
+              type="checkbox"
+              required
+            />
+            Entendo as consequências e quero excluir esta conversa.
+          </label>
+        </div>
+        <p
+          id="conversation-management-error"
+          class="error"
+          role="alert"
+          tabindex="-1"
+        ></p>
+        <div class="form-actions">
+          <button id="conversation-management-submit" type="submit">
+            Salvar título
+          </button>
+          <button
+            id="conversation-management-cancel"
+            type="button"
+            class="subtle"
+          >
+            Cancelar
+          </button>
+        </div>
+      </form>
+    </dialog>
+    <dialog
       id="settings-dialog"
       class="management-dialog"
       aria-labelledby="settings-title"
@@ -584,6 +662,13 @@
       </p>
       <p id="settings-error" class="error" role="alert"></p>
       <p id="settings-feedback" class="form-feedback" role="status"></p>
+      <div class="form-field language-preference">
+        <label for="interface-language">Idioma da interface</label>
+        <select id="interface-language">
+          <option value="pt-BR">Português (Brasil)</option>
+          <option value="en">English</option>
+        </select>
+      </div>
       <section class="management-section" aria-labelledby="defaults-title">
         <div class="section-heading">
           <span class="section-icon"
@@ -1149,7 +1234,7 @@
           <use href="/icons.svg#plug" /></svg
       ></span>
       <p class="eyebrow">CONECTE SUA CONTA</p>
-      <h2 id="provider-title">Sign in with ChatGPT</h2>
+      <h2 id="provider-title">Conectar ChatGPT</h2>
       <p id="auth-state" role="status">Preparando login…</p>
       <div id="auth-events"></div>
       <form id="auth-form" hidden>
