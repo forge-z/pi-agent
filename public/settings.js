@@ -1,3 +1,5 @@
+import { attachCustomProviderConnectionsUI } from "./provider-connections.js";
+
 const { errorText, t, text, attr, plain, locale } = globalThis.PiI18n || {
   errorText: (source) => source,
   t: (source, values = []) =>
@@ -151,6 +153,13 @@ export function configureUI(api, callbacks) {
   let connectionProviders = [];
   let connectionBusy = false;
   let connectionGeneration = 0;
+  const customConnectionsUI = attachCustomProviderConnectionsUI(api, {
+    refresh: async () => {
+      await loadSettings();
+      await callbacks.refreshStatus();
+    },
+    setBusy: setConnectionBusy,
+  });
 
   function availableProviders() {
     return (
@@ -316,6 +325,7 @@ export function configureUI(api, callbacks) {
     servers = settings.mcp || (await api("/api/mcp"));
     mcpStatus = settings.mcpStatus || [];
     renderProviderConnections();
+    customConnectionsUI.update(settings);
     if (
       $("settings-dialog").open &&
       !$("defaults-form").hidden &&
@@ -331,6 +341,7 @@ export function configureUI(api, callbacks) {
   function setConnectionBusy(value) {
     connectionBusy = value;
     $("provider-connections").disabled = value || !settings;
+    customConnectionsUI.setBusy(value);
   }
   async function saveApiKey(id, event) {
     event.preventDefault();
@@ -417,6 +428,7 @@ export function configureUI(api, callbacks) {
   $("settings-dialog").addEventListener("close", () => {
     connectionGeneration++;
     clearConnectionInputs();
+    customConnectionsUI.clearSecrets();
   });
   function show(dialogId) {
     callbacks.closeSidebar();
@@ -1435,6 +1447,7 @@ export function configureUI(api, callbacks) {
     reset() {
       connectionGeneration++;
       clearConnectionInputs();
+      customConnectionsUI.reset();
       connectionProviders = [];
       $("provider-connections").disabled = true;
       settings = null;

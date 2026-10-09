@@ -40,14 +40,23 @@ function fixture(
   const source = readFileSync(
     new URL("../public/settings.js", import.meta.url),
     "utf8",
+  )
+    .replace(/^import[\s\S]*?;\s*/gm, "")
+    .replaceAll("export ", "");
+  const customSource = readFileSync(
+    new URL("../public/provider-connections.js", import.meta.url),
+    "utf8",
   ).replaceAll("export ", "");
-  const configure = runInNewContext(`${source}\nconfigureUI`, {
-    document: { getElementById: get },
-    URLSearchParams,
-    URL,
-    Intl,
-    Date,
-  });
+  const configure = runInNewContext(
+    `const attachCustomProviderConnectionsUI = (() => {${customSource}\nreturn attachCustomProviderConnectionsUI;})();\n${source}\nconfigureUI`,
+    {
+      document: { getElementById: get, createElement: () => new Element() },
+      URLSearchParams,
+      URL,
+      Intl,
+      Date,
+    },
+  );
   configure(api, {
     node: (_tag: string, text?: string) => {
       const element = new Element();

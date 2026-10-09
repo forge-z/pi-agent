@@ -755,6 +755,113 @@
               role="status"
             ></p>
           </article>
+          <article class="management-card provider-card custom-provider-card">
+            <div class="provider-card-heading">
+              <h4>API personalizada</h4>
+            </div>
+            <p class="custom-provider-intro">
+              Conecte um endpoint OpenAI compatível ou Anthropic Messages com um
+              modelo e uma chave API.
+            </p>
+            <form
+              id="custom-provider-form"
+              class="management-form"
+              autocomplete="off"
+            >
+              <fieldset
+                id="custom-provider-fields"
+                class="custom-provider-fields"
+                disabled
+              >
+                <div class="form-field">
+                  <label for="custom-provider-protocol">Protocolo API</label>
+                  <select id="custom-provider-protocol">
+                    <option value="openai-compatible">OpenAI compatível</option>
+                    <option value="anthropic">Anthropic Messages</option>
+                  </select>
+                </div>
+                <div class="form-field">
+                  <label for="custom-provider-endpoint">Endpoint</label>
+                  <input
+                    id="custom-provider-endpoint"
+                    type="url"
+                    required
+                    autocomplete="url"
+                    placeholder="https://api.example.com/v1"
+                  />
+                </div>
+                <div class="form-field">
+                  <label for="custom-provider-model">ID do modelo</label>
+                  <input
+                    id="custom-provider-model"
+                    type="text"
+                    required
+                    autocomplete="off"
+                    list="custom-provider-models"
+                    placeholder="Digite o ID do modelo"
+                    aria-describedby="custom-provider-model-hint"
+                  />
+                  <datalist id="custom-provider-models"></datalist>
+                  <small id="custom-provider-model-hint">
+                    Informe o ID do modelo. A busca é opcional e não altera o
+                    que você digitar.
+                  </small>
+                </div>
+                <div class="form-field">
+                  <label for="custom-provider-api-key">Chave API</label>
+                  <input
+                    id="custom-provider-api-key"
+                    type="password"
+                    autocomplete="off"
+                    autocapitalize="none"
+                    spellcheck="false"
+                    aria-describedby="custom-provider-key-hint"
+                  />
+                  <small id="custom-provider-key-hint">
+                    A chave é salva no servidor e nunca será exibida aqui. Pode
+                    ficar vazia para um endpoint local autorizado.
+                  </small>
+                </div>
+                <label
+                  class="checkbox-line custom-provider-local"
+                  for="custom-provider-allow-local"
+                >
+                  <input id="custom-provider-allow-local" type="checkbox" />
+                  <span>Permitir endpoint na minha rede local</span>
+                </label>
+                <small class="custom-provider-local-hint">
+                  Ative só para um servidor local confiável. Endpoints públicos
+                  devem usar HTTPS.
+                </small>
+                <div class="form-actions">
+                  <button
+                    id="custom-provider-fetch-models"
+                    type="button"
+                    class="subtle"
+                  >
+                    Buscar modelos
+                  </button>
+                  <button id="custom-provider-save" type="submit">
+                    Salvar conexão
+                  </button>
+                </div>
+              </fieldset>
+            </form>
+            <p
+              id="custom-provider-status"
+              class="form-feedback custom-provider-status"
+              role="status"
+              aria-live="polite"
+            ></p>
+            <div class="custom-provider-saved-list">
+              <h5>Suas conexões personalizadas</h5>
+              <div
+                id="custom-provider-list"
+                class="management-list"
+                aria-live="polite"
+              ></div>
+            </div>
+          </article>
         </fieldset>
       </section>
       <section class="management-section" aria-labelledby="defaults-title">

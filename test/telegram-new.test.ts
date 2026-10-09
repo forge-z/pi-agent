@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { Runtime } from "../src/runtime.js";
+import { Runtime, ConversationBusyError } from "../src/runtime.js";
 import { Telegram } from "../src/telegram.js";
 import { telegramCommandCatalog } from "../src/telegram-commands.js";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
@@ -73,6 +73,220 @@ async function fixture() {
 const idOf = (value: unknown) =>
   (value as { conversationId: string }).conversationId;
 
+async function holdSettings(app: Runtime, id: string) {
+  let release!: () => void;
+  let entered!: () => void;
+  const ready = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const work = app.withConversationSettings(id, async () => {
+    entered();
+    await gate;
+  });
+  await ready;
+  return async () => {
+    release();
+    await work;
+  };
+}
+
+test("a temporarily busy binding preserves message, new and start updates for retry", async (t) => {
+  for (const text of [
+    "Mensagem durante ajustes",
+    "/new Após ajustes",
+    "/start",
+  ]) {
+    await t.test(text, async () => {
+      const f = await fixture();
+      let unlock: (() => Promise<void>) | undefined;
+      try {
+        const engine = f.engine();
+        unlock = await holdSettings(f.app, f.anchor);
+        await assert.rejects(
+          engine.receive(update(100, text)),
+          ConversationBusyError,
+        );
+        assert.equal(
+          f.app.store.get("SELECT 1 FROM meta WHERE key='telegram:update:100'"),
+          undefined,
+        );
+        assert.equal(f.app.store.all("SELECT * FROM deliveries").length, 0);
+        assert.equal(f.app.store.all("SELECT * FROM requests").length, 0);
+        await unlock();
+        unlock = undefined;
+        const result = await engine.receive(update(100, text));
+        assert.equal("control" in (result as object), false);
+        if (text !== "/start") assert.ok(idOf(result));
+        assert.deepEqual(await engine.receive(update(100, text)), result);
+      } finally {
+        await unlock?.();
+        await f.close();
+      }
+    });
+  }
+});
+
+test("a temporarily busy selected Telegram conversation does not produce deletion guidance", async () => {
+  const f = await fixture();
+  let unlock: (() => Promise<void>) | undefined;
+  try {
+    const engine = f.engine();
+    const selected = idOf(
+      await engine.receive(update(110, "/new Selecionada")),
+    );
+    unlock = await holdSettings(f.app, selected);
+    await assert.rejects(
+      engine.receive(update(111, "Preserve esta mensagem")),
+      ConversationBusyError,
+    );
+    assert.equal(
+      f.app.store.get("SELECT 1 FROM meta WHERE key='telegram:update:111'"),
+      undefined,
+    );
+    await unlock();
+    unlock = undefined;
+    assert.equal(
+      idOf(await engine.receive(update(111, "Preserve esta mensagem"))),
+      selected,
+    );
+    assert.equal(
+      f.app.store.all("SELECT * FROM requests WHERE requestId='telegram:111'")
+        .length,
+      1,
+    );
+  } finally {
+    await unlock?.();
+    await f.close();
+  }
+});
+
+test("busy bindings keep outbox pending until retry while real revocation still cancels", async () => {
+  const f = await fixture();
+  let unlock: (() => Promise<void>) | undefined;
+  try {
+    const engine = f.engine();
+    f.app.store.run(
+      "INSERT INTO deliveries(id,chat,text) VALUES ('busy-outbox','100','local pending reply')",
+    );
+    unlock = await holdSettings(f.app, f.anchor);
+    await engine.flush();
+    assert.equal(
+      f.app.store.get<{ state: string }>(
+        "SELECT state FROM deliveries WHERE id='busy-outbox'",
+      )?.state,
+      "pending",
+    );
+    assert.equal(f.sent.length, 0);
+    await unlock();
+    unlock = undefined;
+    await engine.flush();
+    await engine.flush();
+    assert.deepEqual(f.sent, ["local pending reply"]);
+    assert.equal(
+      f.app.store.get<{ state: string }>(
+        "SELECT state FROM deliveries WHERE id='busy-outbox'",
+      )?.state,
+      "sent",
+    );
+    await f.app.deleteConversation(f.anchor);
+    f.app.store.run(
+      "INSERT INTO deliveries(id,chat,text) VALUES ('revoked-outbox','100','must never send')",
+    );
+    await engine.flush();
+    assert.equal(
+      f.app.store.get<{ state: string }>(
+        "SELECT state FROM deliveries WHERE id='revoked-outbox'",
+      )?.state,
+      "cancelled",
+    );
+    assert.equal(f.sent.length, 1);
+  } finally {
+    await unlock?.();
+    await f.close();
+  }
+});
+
+test("unexpected binding failures propagate without durable recovery or outbox cancellation", async () => {
+  const f = await fixture();
+  try {
+    const engine = f.engine();
+    const binding = f.app.telegramChats.binding.bind(f.app.telegramChats);
+    f.app.telegramChats.binding = () => {
+      throw new Error("synthetic storage unavailable");
+    };
+    for (const text of ["Mensagem", "/start"])
+      await assert.rejects(
+        engine.receive(update(text === "/start" ? 121 : 120, text)),
+        /synthetic storage unavailable/,
+      );
+    f.app.store.run(
+      "INSERT INTO deliveries(id,chat,text) VALUES ('storage-outbox','100','local pending reply')",
+    );
+    await assert.rejects(engine.flush(), /synthetic storage unavailable/);
+    assert.equal(
+      f.app.store.get<{ state: string }>(
+        "SELECT state FROM deliveries WHERE id='storage-outbox'",
+      )?.state,
+      "pending",
+    );
+    assert.equal(
+      f.app.store.all("SELECT * FROM meta WHERE key LIKE 'telegram:update:%'")
+        .length,
+      0,
+    );
+    f.app.telegramChats.binding = binding;
+  } finally {
+    await f.close();
+  }
+});
+
+test("deferred deliveries survive restart and recheck grant revocation before retry", async (t) => {
+  for (const revoke of [false, true]) {
+    await t.test(
+      revoke ? "revoked before retry" : "authorized after restart",
+      async () => {
+        const f = await fixture();
+        let unlock: (() => Promise<void>) | undefined;
+        try {
+          f.app.store.run(
+            "INSERT INTO deliveries(id,chat,text) VALUES ('deferred-restart','100','local durable reply')",
+          );
+          unlock = await holdSettings(f.app, f.anchor);
+          await f.engine().flush();
+          assert.equal(
+            f.app.store.get<{ state: string }>(
+              "SELECT state FROM deliveries WHERE id='deferred-restart'",
+            )?.state,
+            "pending",
+          );
+          await unlock();
+          unlock = undefined;
+          if (revoke)
+            f.app.store.run(
+              "DELETE FROM telegram_grants WHERE conversationId=?",
+              f.anchor,
+            );
+          await f.restart();
+          await f.engine().flush();
+          assert.equal(
+            f.app.store.get<{ state: string }>(
+              "SELECT state FROM deliveries WHERE id='deferred-restart'",
+            )?.state,
+            revoke ? "cancelled" : "sent",
+          );
+          assert.deepEqual(f.sent, revoke ? [] : ["local durable reply"]);
+        } finally {
+          await unlock?.();
+          await f.close();
+        }
+      },
+    );
+  }
+});
+
 test("new is a Telegram menu command and creates a selected dedicated chat with optional title", async () => {
   const f = await fixture();
   try {
@@ -105,6 +319,82 @@ test("new is a Telegram menu command and creates a selected dedicated chat with 
       f.app.listConversations().filter((row) => row.channel === "telegram")
         .length,
       2,
+    );
+  } finally {
+    await f.close();
+  }
+});
+
+test("relinking a new web chat with history preserves its web origin and creates a separate new Telegram chat", async () => {
+  const f = await fixture();
+  try {
+    await f.app.deleteConversation(f.anchor);
+    const web = await f.app.create("Web antes do pareamento");
+    await f.app.admit(web, "web-before-link", "Mensagem web antes do vínculo", {
+      source: "web",
+    });
+    await (await f.app.conversation(web)).waitForIdle(context);
+    const before = (await f.app.snapshot(web)).view.entries;
+    const engine = f.engine();
+    assert.deepEqual(
+      await engine.receive(update(130, `/link ${f.app.store.link(web)}`)),
+      { linked: web },
+    );
+    assert.equal(f.app.telegramChats.dedicated(web), false);
+    assert.equal(
+      f.app.listConversations().find((c) => c.id === web)?.channel,
+      "web",
+    );
+    const telegram = idOf(
+      await engine.receive(update(131, "/new Contexto Telegram")),
+    );
+    assert.notEqual(telegram, web);
+    assert.deepEqual((await f.app.snapshot(web)).view.entries, before);
+    assert.equal(
+      f.app.listConversations().find((c) => c.id === telegram)?.channel,
+      "telegram",
+    );
+    await engine.receive(update(132, "Mensagem somente Telegram"));
+    await (await f.app.conversation(telegram)).waitForIdle(context);
+    assert.deepEqual((await f.app.snapshot(web)).view.entries, before);
+    await f.app.admit(web, "web-after-link", "Continuar enviando pela web", {
+      source: "web",
+    });
+    await (await f.app.conversation(web)).waitForIdle(context);
+    await f.restart();
+    assert.equal(
+      f.app.listConversations().find((c) => c.id === web)?.channel,
+      "web",
+    );
+    assert.equal(
+      f.app.listConversations().find((c) => c.id === telegram)?.channel,
+      "telegram",
+    );
+    f.app.commands.authorize(web, { source: "web" });
+    assert.throws(
+      () => f.app.commands.authorize(telegram, { source: "web" }),
+      /exclusiva do Telegram/,
+    );
+    assert.equal(
+      f.app.store.all(
+        "SELECT * FROM requests WHERE conversationId=? AND source='web'",
+        web,
+      ).length,
+      2,
+    );
+    assert.equal(
+      f.app.store.all(
+        "SELECT * FROM requests WHERE conversationId=? AND source='telegram'",
+        web,
+      ).length,
+      0,
+    );
+    assert.equal(
+      f.app.store.all(
+        "SELECT * FROM requests WHERE conversationId=? AND source='telegram'",
+        telegram,
+      ).length,
+      1,
     );
   } finally {
     await f.close();

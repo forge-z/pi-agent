@@ -94,8 +94,17 @@ async function fixture() {
     return structuredClone(snapshot);
   };
   let detached = 0;
-  app.watch = async () => () => {
-    detached++;
+  let watchBarrier: Promise<void> | undefined;
+  let markWatchStarted!: () => void;
+  const watchStarted = new Promise<void>((resolve) => {
+    markWatchStarted = resolve;
+  });
+  app.watch = async () => {
+    markWatchStarted();
+    await watchBarrier;
+    return () => {
+      detached++;
+    };
   };
   const origin = "http://127.0.0.1:3199";
   const web = createAppServer(app, {
@@ -131,6 +140,10 @@ async function fixture() {
     blockSnapshot(value: Promise<void>) {
       barrier = value;
     },
+    blockWatch(value: Promise<void>) {
+      watchBarrier = value;
+    },
+    watchStarted,
     change(update: (next: Snapshot) => void) {
       snapshot = structuredClone(snapshot);
       update(snapshot);
@@ -301,6 +314,58 @@ test("disconnect during the initial snapshot detaches the watcher and stops poll
       "closed stream cannot keep polling or send its delayed initial snapshot",
     );
     assert.equal(s.snapshots().length, 0);
+  } finally {
+    release();
+    s.close();
+    await f.close();
+  }
+});
+
+test("disconnect while the watcher attaches detaches its late subscription without starting snapshot polls", async () => {
+  const f = await fixture();
+  let release!: () => void;
+  f.blockWatch(
+    new Promise<void>((resolve) => {
+      release = resolve;
+    }),
+  );
+  const closed = new Promise<void>((resolve) => {
+    f.web.server.on("request", (request, response) => {
+      if (request.url?.endsWith("/events")) response.once("close", resolve);
+    });
+  });
+  const s = await f.open();
+  try {
+    await f.watchStarted;
+    assert.equal(f.reads, 0);
+    s.close();
+    await Promise.race([
+      closed,
+      delay(2000).then(() => {
+        throw new Error("server did not observe the SSE disconnect");
+      }),
+    ]);
+    assert.equal(
+      f.detached,
+      0,
+      "the delayed subscription is not available yet",
+    );
+    release();
+    await delay(1100);
+    assert.equal(
+      f.detached,
+      1,
+      "the late subscription is detached exactly once",
+    );
+    assert.equal(
+      f.reads,
+      0,
+      "a disconnected stream cannot start snapshot polls",
+    );
+    assert.equal(s.snapshots().length, 0);
+    s.close();
+    await delay(10);
+    assert.equal(f.detached, 1, "repeated close keeps cleanup idempotent");
   } finally {
     release();
     s.close();

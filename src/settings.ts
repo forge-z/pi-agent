@@ -308,6 +308,7 @@ export class Settings {
       ...this.defaults(),
       models: this.catalog(),
       providers: this.providers(),
+      customConnections: this.app.providerConnections.list(),
       mcp: this.mcp(),
       mcpStatus: this.app.mcpStatus,
     };

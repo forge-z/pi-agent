@@ -78,8 +78,9 @@ class Element {
     this.open = false;
     this.emit("close");
   }
-  emit(name: string) {
-    for (const listener of this.listeners.get(name) || []) listener();
+  emit(name: string, event?: FormEvent) {
+    for (const listener of this.listeners.get(name) || [])
+      Reflect.apply(listener, this, event ? [event] : []);
   }
   reset() {}
   focus() {}
@@ -167,6 +168,8 @@ function fixture({
     },
   ];
   const settings = {
+    mode: "live",
+    customConnections: [] as Record<string, unknown>[],
     provider: "openai",
     modelId: "shared",
     effort: "low",
@@ -179,6 +182,20 @@ function fixture({
   const api = async (path: string, method = "GET", data?: unknown) => {
     const request = { path, method, data };
     requests.push(request);
+    if (method === "POST" && path === "/api/provider/connections") {
+      await save(request);
+      const draft = data as Record<string, unknown>;
+      const connection = {
+        id: "custom-synthetic-connection",
+        name: "Synthetic API",
+        protocol: draft.protocol,
+        endpoint: draft.endpoint,
+        modelId: draft.modelId,
+        hasApiKey: true,
+      };
+      settings.customConnections.push(connection);
+      return { connection };
+    }
     if (method === "PUT" && path.endsWith("/api-key")) {
       await save(request);
       const provider = providers.find((entry) =>
@@ -190,15 +207,22 @@ function fixture({
     return settings;
   };
   const configure = runInNewContext(
-    readFileSync(
-      new URL("../public/settings.js", import.meta.url),
-      "utf8",
-    ).replaceAll("export ", "") + "\nconfigureUI",
+    "const attachCustomProviderConnectionsUI = (() => {\n" +
+      readFileSync(
+        new URL("../public/provider-connections.js", import.meta.url),
+        "utf8",
+      ).replaceAll("export ", "") +
+      "\nreturn attachCustomProviderConnectionsUI;\n})();\n" +
+      readFileSync(new URL("../public/settings.js", import.meta.url), "utf8")
+        .replace(/^import[\s\S]*?;\s*/gm, "")
+        .replaceAll("export ", "") +
+      "\nconfigureUI",
     {
       PiI18n: page.i18n,
       document: {
         getElementById: get,
         querySelector: () => get("provider-label"),
+        createElement: (tag: string) => new Element("", tag),
       },
       URLSearchParams,
       URL,
@@ -480,5 +504,48 @@ test("DeepSeek uses the same write-only save and explicit replacement lifecycle"
   assert.equal(
     f.get("default-model").children[0].textContent,
     "DeepSeek Flash",
+  );
+});
+
+test("a custom API save shares native credential locks, clears secrets and leaves the selected default intact", async () => {
+  let resolve!: () => void;
+  const f = fixture({
+    credentialType: "oauth",
+    save: () =>
+      new Promise<void>((done) => {
+        resolve = done;
+      }),
+  });
+  await f.ui.load();
+  f.get("settings-dialog").showModal();
+  f.get("custom-provider-protocol").value = "openai-compatible";
+  f.get("custom-provider-endpoint").value = "https://example.com/v1";
+  f.get("custom-provider-model").value = "manual-model";
+  f.get("custom-provider-api-key").value = "synthetic-form-key";
+  f.get("custom-provider-form").emit("submit", { preventDefault() {} });
+  assert.equal(f.get("custom-provider-api-key").value, "");
+  assert.equal(f.get("provider-connections").disabled, true);
+  assert.equal(f.get("custom-provider-fields").disabled, true);
+  f.get("anthropic-api-key").value = "other-synthetic-key";
+  submit(f.get("anthropic-api-form"));
+  assert.equal(
+    f.requests.filter((request) => request.method === "PUT").length,
+    0,
+  );
+  resolve();
+  await flush();
+  assert.equal(f.get("provider-connections").disabled, false);
+  assert.equal(f.get("custom-provider-fields").disabled, false);
+  assert.equal(f.get("custom-provider-api-key").value, "");
+  assert.equal(f.providers[0].credentialType, "oauth");
+  assert.equal(
+    f.requests.some(
+      (request) => request.path === "/api/settings" && request.method !== "GET",
+    ),
+    false,
+  );
+  assert.match(
+    f.get("custom-provider-list").children[0].children[1].textContent,
+    /manual-model/,
   );
 });

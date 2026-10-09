@@ -1,4 +1,8 @@
-import type { Runtime } from "./runtime.js";
+import {
+  ConversationBusyError,
+  ConversationError,
+  type Runtime,
+} from "./runtime.js";
 import { hash, type Delivery } from "./store.js";
 import { CommandError } from "./commands.js";
 import { SettingsError } from "./settings.js";
@@ -11,6 +15,14 @@ import {
 interface ControlRoute extends TelegramOwner {
   botId: number;
   credentialBinding: string;
+}
+function unavailableConversation(error: unknown) {
+  // Settings/deletion inspections are temporary; storage failures must retry too.
+  return (
+    error instanceof CommandError ||
+    (error instanceof ConversationError &&
+      !(error instanceof ConversationBusyError))
+  );
 }
 export interface TelegramUpdate {
   update_id: number;
@@ -285,7 +297,8 @@ export class Telegram {
       const control = this.controlRoute({ chat, user });
       try {
         this.app.telegramChats.binding({ chat, user });
-      } catch {
+      } catch (error) {
+        if (!unavailableConversation(error)) throw error;
         if (control)
           return this.recoveryReply(
             update.update_id,
@@ -341,6 +354,7 @@ export class Telegram {
       try {
         this.app.telegramChats.binding({ chat, user });
       } catch (error) {
+        if (!unavailableConversation(error)) throw error;
         if (control)
           return this.recoveryReply(
             update.update_id,
@@ -376,6 +390,7 @@ export class Telegram {
             prior?.conversationId ??
             this.app.telegramChats.selected({ chat, user });
         } catch (error) {
+          if (!unavailableConversation(error)) throw error;
           if (control)
             return this.recoveryReply(
               update.update_id,
@@ -546,6 +561,7 @@ export class Telegram {
       }
       if (this.privateDm && !this.chats.includes(delivery.chat)) continue;
       let bindingAvailable = !this.privateDm;
+      let bindingBusy = false;
       if (this.privateDm) {
         for (const user of this.users) {
           if (!this.controlRoute({ chat: delivery.chat, user })) continue;
@@ -553,12 +569,17 @@ export class Telegram {
             this.app.telegramChats.binding({ chat: delivery.chat, user });
             bindingAvailable = true;
             break;
-          } catch {
+          } catch (error) {
+            if (error instanceof ConversationBusyError) bindingBusy = true;
+            else if (!unavailableConversation(error)) throw error;
             /* Only new, owner-scoped guidance can bypass a missing history binding. */
           }
         }
       }
       if (!control && !bindingAvailable) {
+        // No authorization decision has completed yet. Leave this delivery
+        // pending so the next flush rechecks grants and connection identity.
+        if (bindingBusy) continue;
         this.app.store.run(
           "UPDATE deliveries SET state='cancelled',result=? WHERE id=? AND state='pending'",
           "Vínculo Telegram revogado antes do envio.",

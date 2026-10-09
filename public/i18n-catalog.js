@@ -884,6 +884,46 @@ globalThis.PiEnglish = {
   "Viewer CUA requer token MCP configurado":
     "The CUA viewer requires a configured MCP token.",
   "Arquivo de token MCP indisponível": "The MCP token file is unavailable.",
+  "API personalizada": "Custom API",
+  "Conecte um endpoint OpenAI compatível ou Anthropic Messages com um modelo e uma chave API.":
+    "Connect an OpenAI-compatible or Anthropic Messages endpoint with a model and API key.",
+  "Protocolo API": "API protocol",
+  "OpenAI compatível": "OpenAI-compatible",
+  "Anthropic Messages": "Anthropic Messages",
+  Endpoint: "Endpoint",
+  "ID do modelo": "Model ID",
+  "Digite o ID do modelo": "Enter the model ID",
+  "Informe o ID do modelo. A busca é opcional e não altera o que você digitar.":
+    "Enter the model ID. Model discovery is optional and will not change what you type.",
+  "Chave API": "API key",
+  "A chave é salva no servidor e nunca será exibida aqui. Pode ficar vazia para um endpoint local autorizado.":
+    "The key is saved on the server and will never be shown here. It may be left blank for an authorized local endpoint.",
+  "Permitir endpoint na minha rede local":
+    "Allow an endpoint on my local network",
+  "Ative só para um servidor local confiável. Endpoints públicos devem usar HTTPS.":
+    "Enable this only for a trusted local server. Public endpoints must use HTTPS.",
+  "Buscar modelos": "Find models",
+  "Salvar conexão": "Save connection",
+  "Suas conexões personalizadas": "Your custom connections",
+  "Nenhuma conexão personalizada salva.": "No custom connections saved.",
+  "Sem chave API · endpoint local": "No API key · local endpoint",
+  "Escolha um protocolo válido.": "Choose a valid protocol.",
+  "Informe um endpoint válido.": "Enter a valid endpoint.",
+  "Use HTTPS. Para um endpoint HTTP local, habilite a opção de rede local.":
+    "Use HTTPS. For a local HTTP endpoint, enable the local network option.",
+  "Informe o identificador do modelo.": "Enter the model ID.",
+  "Informe uma chave API. Ela será salva no servidor e não será exibida novamente.":
+    "Enter an API key. It will be saved on the server and will not be shown again.",
+  "Buscando modelos…": "Finding models…",
+  "Lista de modelos atualizada. Você também pode digitar um modelo.":
+    "Model list updated. You can also type a model ID.",
+  "Nenhum modelo encontrado. Você ainda pode digitar um modelo.":
+    "No models found. You can still type a model ID.",
+  "Não foi possível buscar modelos. Você ainda pode informar o modelo manualmente.":
+    "Could not find models. You can still enter a model ID manually.",
+  "Salvando conexão…": "Saving connection…",
+  "Conexão salva. Escolha-a nas configurações de modelo.":
+    "Connection saved. Choose it in model settings.",
 };
 globalThis.PiInterfaceErrors = [
   "Permissões CUA inválidas: informe apenas clipboard como booleano.",
