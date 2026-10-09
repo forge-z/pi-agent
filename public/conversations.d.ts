@@ -2,6 +2,9 @@ export type ManagedConversation = {
   id: string;
   title: string;
   deletedAt?: number | null;
+  purgeAt?: number | null;
+  channel?: "web" | "telegram";
+  telegramLinked?: boolean;
 };
 
 export type ConversationManagementCallbacks = {
@@ -23,4 +26,6 @@ export function attachConversationManagementUI(
   showActiveView: () => void;
   isDeletedView: () => boolean;
   getDeletedConversations: () => ManagedConversation[];
+  refreshDeletedView: () => Promise<boolean>;
+  reset: () => void;
 };

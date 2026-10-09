@@ -60,6 +60,17 @@ export function attachConversationManagementUI(api, callbacks) {
     return element;
   }
 
+  function telegramOriginIcon() {
+    const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    icon.setAttribute("class", "icon conversation-telegram-icon");
+    icon.setAttribute("aria-hidden", "true");
+    attr(icon, "title", () => t("Conversa Telegram"));
+    const use = document.createElementNS("http://www.w3.org/2000/svg", "use");
+    use.setAttribute("href", "/icons.svg#telegram-logo");
+    icon.append(use);
+    return icon;
+  }
+
   function report(error) {
     callbacks.report?.(error);
   }
@@ -132,6 +143,8 @@ export function attachConversationManagementUI(api, callbacks) {
       row.setAttribute("data-conversation-id", conversation.id);
 
       if (showingDeleted) {
+        if (conversation.channel === "telegram")
+          row.append(telegramOriginIcon());
         const title = document.createElement("span");
         title.className = "conversation-label deleted-conversation-label";
         plain(title, conversation.title);
@@ -147,22 +160,9 @@ export function attachConversationManagementUI(api, callbacks) {
         const label = document.createElement("span");
         label.className = "conversation-label";
         plain(label, conversation.title);
-        if (conversation.telegramLinked === true) {
-          const telegramIcon = document.createElementNS(
-            "http://www.w3.org/2000/svg",
-            "svg",
-          );
-          telegramIcon.setAttribute("class", "icon conversation-telegram-icon");
-          telegramIcon.setAttribute("aria-hidden", "true");
-          attr(telegramIcon, "title", () => t("Conversa web e Telegram"));
-          attr(select, "aria-description", () => t("Conversa web e Telegram"));
-          const use = document.createElementNS(
-            "http://www.w3.org/2000/svg",
-            "use",
-          );
-          use.setAttribute("href", "/icons.svg#telegram-logo");
-          telegramIcon.append(use);
-          select.append(telegramIcon);
+        if (conversation.channel === "telegram") {
+          attr(select, "aria-description", () => t("Conversa Telegram"));
+          select.append(telegramOriginIcon());
         }
         select.append(label);
         select.onclick = handle(async () => {
@@ -509,6 +509,20 @@ export function attachConversationManagementUI(api, callbacks) {
     render();
   }
 
+  async function refreshDeletedView() {
+    if (!showingDeleted) return false;
+    if (!(await loadDeletedConversations()) || !showingDeleted) return false;
+    render();
+    return true;
+  }
+
+  function reset() {
+    deletedLoadVersion++;
+    showingDeleted = false;
+    deletedConversations = [];
+    closeActions();
+  }
+
   function showActiveView() {
     deletedLoadVersion++;
     showingDeleted = false;
@@ -541,5 +555,7 @@ export function attachConversationManagementUI(api, callbacks) {
     showActiveView,
     isDeletedView: () => showingDeleted,
     getDeletedConversations: () => deletedConversations,
+    refreshDeletedView,
+    reset,
   };
 }

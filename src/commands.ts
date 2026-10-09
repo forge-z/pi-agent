@@ -361,7 +361,10 @@ export class Commands {
                 )
                   .map((entry) => `${entry.usage} — ${entry.description}`)
                   .join("\n") +
-                "\n//texto envia uma barra literal. /agents não cria agentes; /stop preserva os agendamentos futuros.";
+                "\n//texto envia uma barra literal. /agents não cria agentes; /stop preserva os agendamentos futuros." +
+                (access.source === "telegram"
+                  ? "\n/new [TÍTULO] cria e seleciona uma nova conversa Telegram; também pode usar /chats new [TÍTULO]."
+                  : "");
               break;
             case "chats": {
               if (access.source !== "telegram")
@@ -393,7 +396,7 @@ export class Commands {
                       `${c.id === current ? "→ " : ""}${c.id} · ${c.title}`,
                   )
                   .join("\n") || "Nenhuma conversa Telegram criada.") +
-                "\n/chats new TÍTULO cria uma conversa; /chats ID seleciona. O histórico antigo continua na web. As próximas mensagens usam contexto exclusivo do Telegram.";
+                "\n/new [TÍTULO] ou /chats new [TÍTULO] cria uma conversa; /chats ID seleciona. O histórico antigo continua na web. As próximas mensagens usam contexto exclusivo do Telegram.";
               break;
             }
             case "agents": {

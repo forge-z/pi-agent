@@ -9,6 +9,7 @@ type Conversation = {
   title: string;
   deletedAt?: number | null;
   purgeAt?: number | null;
+  channel?: "web" | "telegram";
   telegramLinked?: boolean;
 };
 type Api = (path: string, method?: string, data?: unknown) => Promise<unknown>;
@@ -26,8 +27,11 @@ type AttachConversationManagementUI = (
   },
 ) => {
   render: (items?: Conversation[]) => void;
+  showActiveView: () => void;
   isDeletedView: () => boolean;
   getDeletedConversations: () => Conversation[];
+  refreshDeletedView: () => Promise<boolean>;
+  reset: () => void;
 };
 
 type Handler = (event: { preventDefault(): void }) => unknown;
@@ -125,6 +129,7 @@ function fixture({
     title: string;
     deletedAt: number;
     purgeAt?: number | null;
+    channel?: "web" | "telegram";
     telegramLinked?: boolean;
   }>;
   failDelete?: boolean;
@@ -512,59 +517,162 @@ test("language changes relabel open conversation menus and dialogs without chang
   );
 });
 
-test("linked web conversations show only the Telegram icon and keep translated accessible context", () => {
+test("only Telegram-origin conversations show the translated icon, never legacy linked web rows", () => {
   const f = fixture({
     language: "en",
     conversations: [
-      { id: "linked", title: "Web history", telegramLinked: true },
-      { id: "unlinked", title: "Telegram lookalike" },
+      {
+        id: "telegram-origin",
+        title: "Telegram-origin history",
+        channel: "telegram",
+        telegramLinked: true,
+      },
+      {
+        id: "web-linked",
+        title: "Linked web history",
+        channel: "web",
+        telegramLinked: true,
+      },
+      { id: "lookalike", title: "Telegram in title only", channel: "web" },
     ],
   });
   const rows = f.document.getElementById("conversations")!.children;
-  const linked = rows[0]!.children[0]!;
-  const unlinked = rows[1]!.children[0]!;
-  const icon = linked.children[0]!;
+  const telegram = rows[0]!.children[0]!;
+  const linkedWeb = rows[1]!.children[0]!;
+  const lookalike = rows[2]!.children[0]!;
+  const icon = telegram.children[0]!;
 
   assert.equal(icon.tagName, "svg");
   assert.equal(icon.attributes.get("class"), "icon conversation-telegram-icon");
   assert.equal(icon.attributes.get("aria-hidden"), "true");
-  assert.equal(icon.attributes.get("title"), "Web conversation and Telegram");
+  assert.equal(icon.attributes.get("title"), "Telegram conversation");
   assert.equal(
     icon.children[0]!.attributes.get("href"),
     "/icons.svg#telegram-logo",
   );
   assert.equal(
-    linked.attributes.get("aria-description"),
-    "Web conversation and Telegram",
+    telegram.attributes.get("aria-description"),
+    "Telegram conversation",
   );
-  assert.equal(linked.title, "Web history");
-  assert.equal(linked.children[1]!.textContent, "Web history");
+  assert.equal(telegram.title, "Telegram-origin history");
+  assert.equal(telegram.children[1]!.textContent, "Telegram-origin history");
   f.i18n.setLanguage("pt-BR");
-  assert.equal(icon.attributes.get("title"), "Conversa web e Telegram");
+  assert.equal(icon.attributes.get("title"), "Conversa Telegram");
   assert.equal(
-    linked.attributes.get("aria-description"),
-    "Conversa web e Telegram",
+    telegram.attributes.get("aria-description"),
+    "Conversa Telegram",
   );
-  assert.equal(unlinked.children.length, 1);
-  assert.equal(unlinked.children[0]!.textContent, "Telegram lookalike");
+  assert.equal(linkedWeb.children.length, 1);
+  assert.equal(linkedWeb.children[0]!.textContent, "Linked web history");
+  assert.equal(lookalike.children.length, 1);
+  assert.equal(lookalike.children[0]!.textContent, "Telegram in title only");
 });
 
-test("deleted conversation labels never render a Telegram marker", async () => {
+test("Telegram-origin marker stays icon-only in trash and after restoration", async () => {
   const f = fixture({
+    conversations: [
+      {
+        id: "deleted-telegram",
+        title: "Telegram-origin history",
+        channel: "telegram",
+      },
+    ],
     deleted: [
       {
-        id: "deleted-linked",
-        title: "Archived history",
+        id: "deleted-telegram",
+        title: "Telegram-origin history",
         deletedAt: 123,
+        channel: "telegram",
+      },
+      {
+        id: "deleted-web",
+        title: "Linked web history",
+        deletedAt: 124,
+        channel: "web",
         telegramLinked: true,
       },
     ],
   });
   await f.document.getElementById("toggle-deleted-conversations")!.onclick?.();
 
-  const row = f.document.getElementById("conversations")!.children[0]!;
-  assert.equal(row.children[0]!.tagName, "span");
-  assert.equal(row.children[0]!.textContent, "Archived history");
+  const rows = f.document.getElementById("conversations")!.children;
+  const telegramRow = rows[0]!;
+  assert.equal(telegramRow.children[0]!.tagName, "svg");
+  assert.equal(
+    telegramRow.children[0]!.attributes.get("title"),
+    "Conversa Telegram",
+  );
+  assert.equal(telegramRow.children[1]!.tagName, "span");
+  assert.equal(telegramRow.children[1]!.textContent, "Telegram-origin history");
+  const webRow = rows[1]!;
+  assert.equal(webRow.children[0]!.tagName, "span");
+  assert.equal(webRow.children[0]!.textContent, "Linked web history");
+
+  const panel = await openActions(f, "deleted-telegram");
+  await buttonWithText(panel, "Restaurar").onclick?.();
+  f.manager.showActiveView();
+  const restored =
+    f.document.getElementById("conversations")!.children[0]!.children[0]!;
+  assert.equal(
+    restored.children[0]!.children[0]!.attributes.get("href"),
+    "/icons.svg#telegram-logo",
+  );
+});
+
+test("deleted sidebar refresh ignores a stale result when the user switches views", async () => {
+  let resolveRefresh!: (rows: Conversation[]) => void;
+  let reads = 0;
+  const f = fixture({
+    deleted: [{ id: "deleted", title: "Current trash row", deletedAt: 123 }],
+    deletedReader: () => {
+      reads++;
+      if (reads === 1)
+        return Promise.resolve([
+          { id: "deleted", title: "Current trash row", deletedAt: 123 },
+        ]);
+      return new Promise((resolve) => {
+        resolveRefresh = resolve;
+      });
+    },
+  });
+  await f.document.getElementById("toggle-deleted-conversations")!.onclick?.();
+  const refresh = f.manager.refreshDeletedView();
+  f.manager.showActiveView();
+  resolveRefresh([{ id: "newer", title: "New trash row", deletedAt: 456 }]);
+
+  assert.equal(await refresh, false);
+  assert.equal(f.manager.isDeletedView(), false);
+  assert.equal(
+    f.manager.getDeletedConversations()[0]!.title,
+    "Current trash row",
+  );
+  assert.equal(
+    f.document.getElementById("conversations")!.children[0]!.children[0]!
+      .children[0]!.textContent,
+    "Conversa ativa",
+  );
+});
+
+test("reset invalidates an in-flight trash view toggle", async () => {
+  let resolveLoad!: (rows: Conversation[]) => void;
+  const f = fixture({
+    deletedReader: () =>
+      new Promise((resolve) => {
+        resolveLoad = resolve;
+      }),
+  });
+  const toggle = f.document.getElementById("toggle-deleted-conversations")!
+    .onclick!();
+  f.manager.reset();
+  resolveLoad([{ id: "deleted", title: "Stale trash row", deletedAt: 123 }]);
+  await toggle;
+
+  assert.equal(f.manager.isDeletedView(), false);
+  assert.equal(
+    f.document.getElementById("conversations")!.children[0]!.children[0]!
+      .children[0]!.textContent,
+    "Conversa ativa",
+  );
 });
 
 test("archive warns about seven-day irreversible deletion before confirmation", async () => {

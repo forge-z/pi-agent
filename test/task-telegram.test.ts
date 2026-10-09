@@ -38,6 +38,10 @@ async function fixture(answer = "**Resultado do cron**", linked = true) {
   let tasks = new Tasks(app, () => now);
   const id = await app.create("Conversa do cron");
   const config = { ...connection, conversationId: id };
+  app.store.run(
+    "INSERT INTO credentials VALUES ('telegram:bot',?)",
+    JSON.stringify({ token: "123456:fake-local-only", botId: 123456 }),
+  );
   if (linked) {
     app.store.run("INSERT INTO telegram VALUES (?,?,?)", "42", id, "42");
     app.store.run("INSERT INTO telegram_grants VALUES (?,?,?)", "42", "42", id);
@@ -57,7 +61,10 @@ async function fixture(answer = "**Resultado do cron**", linked = true) {
   });
   // This fixture exercises the pre-destination behavior of schedules migrated
   // from 007f62e; new tasks now default to web-only.
-  app.store.run("UPDATE tasks SET delivery='legacy' WHERE id=?", createdTask.id);
+  app.store.run(
+    "UPDATE tasks SET delivery='legacy' WHERE id=?",
+    createdTask.id,
+  );
   const task = tasks.get(createdTask.id)!;
   const sent: Array<{ chat: string; text: string }> = [];
   let uncertain = false;

@@ -763,71 +763,29 @@ export class Runtime {
     });
   }
   listConversations(deleted = false) {
-    const connectionRow = !deleted
-      ? this.store.get<{ value: string }>(
-          "SELECT value FROM meta WHERE key='telegram:connection'",
-        )
-      : undefined;
-    const credentialRow = connectionRow
-      ? this.store.get<{ value: string }>(
-          "SELECT value FROM credentials WHERE provider='telegram:bot'",
-        )
-      : undefined;
-    let connection:
-      | {
-          enabled?: unknown;
-          bot?: { id?: unknown };
-          userId?: unknown;
-          chatId?: unknown;
-        }
-      | undefined;
-    let credential: { token?: unknown; botId?: unknown } | undefined;
-    try {
-      if (connectionRow) connection = JSON.parse(connectionRow.value);
-      if (credentialRow) credential = JSON.parse(credentialRow.value);
-    } catch {
-      // Invalid persisted data cannot authorize a sidebar marker.
-    }
-    const botId = connection?.bot?.id;
-    const chat = connection?.chatId;
-    const user = connection?.userId;
-    const activeTelegram =
-      connection?.enabled === true &&
-      typeof botId === "number" &&
-      Number.isSafeInteger(botId) &&
-      botId > 0 &&
-      credential?.botId === botId &&
-      typeof credential?.token === "string" &&
-      typeof user === "string" &&
-      /^[1-9]\d{0,15}$/.test(user) &&
-      Number.isSafeInteger(Number(user)) &&
-      typeof chat === "string" &&
-      /^[1-9]\d*$/.test(chat);
-    const linkedExpression = activeTelegram
-      ? `EXISTS (
-           SELECT 1 FROM telegram t JOIN telegram_grants g
-             ON g.chat=t.chat AND g.user=t.user AND g.conversationId=t.conversationId
-           WHERE t.chat=? AND t.user=? AND t.conversationId=c.id
-         )`
-      : "0";
+    // Origin is durable metadata, independent of the current Telegram binding,
+    // authorization, connection, or selected chat.
     const rows = this.store.all<{
       id: string;
       title: string;
       deletedAt: number | null;
       purgeAt: number | null;
-      telegramLinked: number;
+      channel: "telegram" | "web";
     }>(
-      `SELECT c.id,c.title,l.deletedAt,r.purgeAt,${linkedExpression} AS telegramLinked
-       FROM conversations c LEFT JOIN conversation_lifecycle l ON l.conversationId=c.id LEFT JOIN conversation_retention r ON r.conversationId=c.id
-       WHERE c.id NOT IN (SELECT conversationId FROM telegram_conversations)
-         AND c.id NOT IN (SELECT conversationId FROM conversation_purges)
+      `SELECT c.id,c.title,l.deletedAt,r.purgeAt,
+         CASE WHEN d.conversationId IS NULL THEN 'web' ELSE 'telegram' END AS channel
+       FROM conversations c
+       LEFT JOIN conversation_lifecycle l ON l.conversationId=c.id
+       LEFT JOIN conversation_retention r ON r.conversationId=c.id
+       LEFT JOIN telegram_conversations d ON d.conversationId=c.id
+       WHERE c.id NOT IN (SELECT conversationId FROM conversation_purges)
          AND l.deletedAt IS ${deleted ? "NOT " : ""}NULL
        ORDER BY c.rowid DESC`,
-      ...(activeTelegram ? [String(chat), String(user)] : []),
     );
-    return rows.map(({ telegramLinked, ...conversation }) => ({
+    return rows.map((conversation) => ({
       ...conversation,
-      telegramLinked: telegramLinked === 1,
+      // Compatibility for sidebar clients: the marker identifies Telegram origin.
+      telegramLinked: conversation.channel === "telegram",
     }));
   }
   renameConversation(id: string, title: unknown) {
