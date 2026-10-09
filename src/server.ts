@@ -437,6 +437,19 @@ export function createAppServer(app: Runtime, options: ServerOptions) {
             throw new HttpError(404, "Recibo de comando não encontrado");
           return json(response, 200, receipt);
         }
+        const purgeRoute = /^\/api\/conversations\/([0-9]+)\/purge$/.exec(path);
+        if (purgeRoute && method === "POST") {
+          const input = await body(request);
+          return json(
+            response,
+            200,
+            await app.purgeConversation(
+              purgeRoute[1],
+              input.confirm,
+              input.expectedDeletedAt,
+            ),
+          );
+        }
         const restoreRoute = /^\/api\/conversations\/([0-9]+)\/restore$/.exec(
           path,
         );

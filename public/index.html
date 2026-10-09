@@ -514,9 +514,11 @@
           />
         </div>
         <div id="conversation-management-delete-fields" hidden>
-          <p>
-            Você poderá restaurar a conversa pela lista de conversas excluídas.
-            A restauração não reativa tarefas nem vincula o Telegram.
+          <p id="conversation-management-deadline"></p>
+          <p id="conversation-management-delete-notice">
+            Você poderá restaurar a conversa durante 7 dias. Depois desse prazo,
+            ela será excluída definitivamente. A restauração não reativa tarefas
+            nem vincula o Telegram.
           </p>
           <label
             class="checkbox-line"
@@ -527,7 +529,9 @@
               type="checkbox"
               required
             />
-            Entendo as consequências e quero excluir esta conversa.
+            <span id="conversation-management-delete-acknowledgement"
+              >Entendo as consequências e quero excluir esta conversa.</span
+            >
           </label>
         </div>
         <p

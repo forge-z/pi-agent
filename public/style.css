@@ -669,9 +669,19 @@ p {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.conversation-purge-deadline {
+  flex-basis: 100%;
+  font-size: 0.66rem;
+  color: var(--muted);
+  padding: 0 8px 8px;
+}
 #conversations button .icon {
   width: 17px;
   height: 17px;
+}
+#conversations button .conversation-telegram-icon {
+  flex: 0 0 17px;
+  opacity: 0.72;
 }
 #conversations button .conversation-label {
   overflow: hidden;

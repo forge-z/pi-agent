@@ -24,7 +24,20 @@ import {
   type Submission,
   type SubmissionId,
 } from "@earendil-works/pi-durable";
-import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
+import {
+  openNodeSqliteDatabase,
+  type NodeSqliteDatabase,
+} from "@earendil-works/pi-durable/storage/sqlite/node";
+import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
+import {
+  CONVERSATION_RETENTION_MS,
+  TrashBlockedError,
+  assertAppPurgeSafe,
+  assertDurablePurgeSafe,
+  removeDurableHistory,
+  removeAppHistory,
+  ownedDeliveries,
+} from "./conversation-trash.js";
 import lockfile from "proper-lockfile";
 import {
   Store,
@@ -60,6 +73,7 @@ export interface RuntimeOptions {
   modelId?: string;
   provider?: string;
   cuaViewerFactory?: CuaViewerFactory;
+  now?: () => number;
 }
 export class ConversationError extends Error {
   constructor(
@@ -111,6 +125,10 @@ export class Runtime {
   >();
   private closing = false;
   private conversationChanges = new Set<string>();
+  private durableDatabase!: NodeSqliteDatabase;
+  private trashTimer?: ReturnType<typeof setInterval>;
+  private trashSweep?: Promise<void>;
+  private purges = new Set<Promise<unknown>>();
   private guardedTools = new WeakSet<object>();
   private constructor(readonly options: RuntimeOptions) {
     this.store = new Store(options.dir);
@@ -400,8 +418,11 @@ export class Runtime {
         }),
       );
       await app.refreshMcpTools();
+      app.durableDatabase = await openNodeSqliteDatabase(
+        `${options.dir}/durable.sqlite`,
+      );
       app.harness = await Harness.open(
-        await openNodeSqliteStorage(`${options.dir}/durable.sqlite`),
+        await SqliteStorage.open(app.durableDatabase),
         {
           models: app.models,
           registry,
@@ -414,6 +435,12 @@ export class Runtime {
         context,
       );
 
+      // Old archived rows receive a full grace period exactly once at activation.
+      app.store.run(
+        "INSERT OR IGNORE INTO conversation_retention SELECT conversationId,? FROM conversation_lifecycle WHERE deletedAt IS NOT NULL AND conversationId NOT IN (SELECT conversationId FROM conversation_purges)",
+        app.now() + CONVERSATION_RETENTION_MS,
+      );
+      await app.sweepConversationTrash();
       let cursor: import("@earendil-works/pi-durable").Cursor | undefined;
       do {
         const recovered = await app.harness.commit(
@@ -421,6 +448,13 @@ export class Runtime {
           context,
         );
         for (const row of recovered.items) {
+          if (
+            app.store.get(
+              "SELECT 1 FROM conversation_purges WHERE conversationId=?",
+              String(row.id),
+            )
+          )
+            continue;
           app.store.run(
             "INSERT OR IGNORE INTO conversations VALUES (?,?)",
             String(row.id),
@@ -504,10 +538,15 @@ export class Runtime {
         ))
           await app.recordMcpOutcome(call);
       app.harness.resume();
+      app.trashTimer = setInterval(() => {
+        void app!.sweepConversationTrash().catch(() => {});
+      }, 60_000);
+      app.trashTimer.unref();
       return app;
     } catch (e) {
       await app?.tasks.close();
       if (app?.harness) await app.harness.close(context);
+      else await app?.durableDatabase?.close();
       app?.store.close();
       await release();
       throw e;
@@ -724,13 +763,72 @@ export class Runtime {
     });
   }
   listConversations(deleted = false) {
-    return this.store.all<{
+    const connectionRow = !deleted
+      ? this.store.get<{ value: string }>(
+          "SELECT value FROM meta WHERE key='telegram:connection'",
+        )
+      : undefined;
+    const credentialRow = connectionRow
+      ? this.store.get<{ value: string }>(
+          "SELECT value FROM credentials WHERE provider='telegram:bot'",
+        )
+      : undefined;
+    let connection:
+      | {
+          enabled?: unknown;
+          bot?: { id?: unknown };
+          userId?: unknown;
+          chatId?: unknown;
+        }
+      | undefined;
+    let credential: { token?: unknown; botId?: unknown } | undefined;
+    try {
+      if (connectionRow) connection = JSON.parse(connectionRow.value);
+      if (credentialRow) credential = JSON.parse(credentialRow.value);
+    } catch {
+      // Invalid persisted data cannot authorize a sidebar marker.
+    }
+    const botId = connection?.bot?.id;
+    const chat = connection?.chatId;
+    const user = connection?.userId;
+    const activeTelegram =
+      connection?.enabled === true &&
+      typeof botId === "number" &&
+      Number.isSafeInteger(botId) &&
+      botId > 0 &&
+      credential?.botId === botId &&
+      typeof credential?.token === "string" &&
+      typeof user === "string" &&
+      /^[1-9]\d{0,15}$/.test(user) &&
+      Number.isSafeInteger(Number(user)) &&
+      typeof chat === "string" &&
+      /^[1-9]\d*$/.test(chat);
+    const linkedExpression = activeTelegram
+      ? `EXISTS (
+           SELECT 1 FROM telegram t JOIN telegram_grants g
+             ON g.chat=t.chat AND g.user=t.user AND g.conversationId=t.conversationId
+           WHERE t.chat=? AND t.user=? AND t.conversationId=c.id
+         )`
+      : "0";
+    const rows = this.store.all<{
       id: string;
       title: string;
       deletedAt: number | null;
+      purgeAt: number | null;
+      telegramLinked: number;
     }>(
-      `SELECT c.id,c.title,l.deletedAt FROM conversations c LEFT JOIN conversation_lifecycle l ON l.conversationId=c.id WHERE c.id NOT IN (SELECT conversationId FROM telegram_conversations) AND l.deletedAt IS ${deleted ? "NOT " : ""}NULL ORDER BY c.rowid DESC`,
+      `SELECT c.id,c.title,l.deletedAt,r.purgeAt,${linkedExpression} AS telegramLinked
+       FROM conversations c LEFT JOIN conversation_lifecycle l ON l.conversationId=c.id LEFT JOIN conversation_retention r ON r.conversationId=c.id
+       WHERE c.id NOT IN (SELECT conversationId FROM telegram_conversations)
+         AND c.id NOT IN (SELECT conversationId FROM conversation_purges)
+         AND l.deletedAt IS ${deleted ? "NOT " : ""}NULL
+       ORDER BY c.rowid DESC`,
+      ...(activeTelegram ? [String(chat), String(user)] : []),
     );
+    return rows.map(({ telegramLinked, ...conversation }) => ({
+      ...conversation,
+      telegramLinked: telegramLinked === 1,
+    }));
   }
   renameConversation(id: string, title: unknown) {
     this.assertConversationAvailable(id);
@@ -758,6 +856,16 @@ export class Runtime {
     return { id, title: value, deletedAt: null };
   }
   restoreConversation(id: string) {
+    if (
+      this.store.get(
+        "SELECT 1 FROM conversation_purges WHERE conversationId=?",
+        id,
+      )
+    )
+      throw new ConversationError(
+        "Exclusão permanente iniciada. A conversa não pode ser recuperada.",
+        409,
+      );
     if (this.conversationChanges.has(id))
       throw new ConversationError("Conversa em atualização", 409);
     const row = this.store.get<{ title: string }>(
@@ -765,11 +873,23 @@ export class Runtime {
       id,
     );
     if (!row) throw new ConversationError("Conversa não encontrada", 404);
-    this.store.run(
-      "DELETE FROM conversation_lifecycle WHERE conversationId=?",
-      id,
-    );
-    return { id, title: row.title, deletedAt: null };
+    this.store.db.exec("SAVEPOINT restore_conversation");
+    try {
+      this.store.run(
+        "DELETE FROM conversation_lifecycle WHERE conversationId=?",
+        id,
+      );
+      this.store.run(
+        "DELETE FROM conversation_retention WHERE conversationId=?",
+        id,
+      );
+      this.store.db.exec("RELEASE SAVEPOINT restore_conversation");
+    } catch (error) {
+      this.store.db.exec("ROLLBACK TO SAVEPOINT restore_conversation");
+      this.store.db.exec("RELEASE SAVEPOINT restore_conversation");
+      throw error;
+    }
+    return { id, title: row.title, deletedAt: null, purgeAt: null };
   }
   async deleteConversation(id: string) {
     this.assertHandoffAvailable(id);
@@ -837,19 +957,14 @@ export class Runtime {
           );
         // Legacy deliveries had no owner column; match their durable aliases and
         // conservatively protect the currently revoked chat as well.
-        const deliveries = `SELECT d.id FROM deliveries d WHERE
-          d.id IN (SELECT deliveryId FROM delivery_conversations WHERE conversationId=?)
-          OR substr(d.id,1,?)=?
-          OR d.id IN (SELECT p.deliveryId FROM task_notification_parts p JOIN task_notifications n ON n.id=p.notificationId WHERE n.conversationId=?)
-          OR EXISTS (SELECT 1 FROM command_receipts r WHERE r.conversationId=? AND substr(d.id,1,length('command:'||r.requestId||':'))='command:'||r.requestId||':')
-          OR EXISTS (SELECT 1 FROM meta m WHERE d.id GLOB 'decision:*' AND m.key='telegram:update:'||substr(d.id,10)
-            AND CASE WHEN json_valid(m.value) THEN json_extract(m.value,'$.conversationId')=? ELSE 0 END)
-          OR (d.chat IN (SELECT chat FROM telegram WHERE conversationId=?)
-            AND NOT EXISTS (SELECT 1 FROM delivery_conversations o WHERE o.deliveryId=d.id)
-            AND NOT EXISTS (SELECT 1 FROM task_notification_parts p WHERE p.deliveryId=d.id)
-            AND NOT EXISTS (SELECT 1 FROM command_receipts r WHERE substr(d.id,1,length('command:'||r.requestId||':'))='command:'||r.requestId||':')
-            AND d.id NOT GLOB '[0-9]*:*')`;
-        const args = [id, id.length + 1, `${id}:`, id, id, id, id];
+        const provenDeliveries = ownedDeliveries(id);
+        const deliveries = `${provenDeliveries.sql} UNION SELECT d.id FROM deliveries d WHERE
+          d.chat IN (SELECT chat FROM telegram WHERE conversationId=?)
+          AND NOT EXISTS (SELECT 1 FROM delivery_conversations o WHERE o.deliveryId=d.id)
+          AND NOT EXISTS (SELECT 1 FROM task_notification_parts p WHERE p.deliveryId=d.id)
+          AND NOT EXISTS (SELECT 1 FROM command_receipts r WHERE substr(d.id,1,length('command:'||r.requestId||':'))='command:'||r.requestId||':')
+          AND d.id NOT GLOB '[0-9]*:*'`;
+        const args = [...provenDeliveries.args, id];
         if (
           store.get(
             `SELECT 1 FROM deliveries WHERE state IN ('sending','uncertain') AND id IN (${deliveries})`,
@@ -875,14 +990,32 @@ export class Runtime {
           "INSERT OR IGNORE INTO telegram_initial_revocations VALUES (?)",
           id,
         );
-        const deletedAt = Date.now();
+        const previousArchive = store.get<{ lastDeletedAt: number }>(
+          "SELECT lastDeletedAt FROM conversation_archive_versions WHERE conversationId=?",
+          id,
+        );
+        const deletedAt = Math.max(
+          this.now(),
+          (previousArchive?.lastDeletedAt ?? -1) + 1,
+        );
+        store.run(
+          "INSERT INTO conversation_archive_versions VALUES (?,?) ON CONFLICT(conversationId) DO UPDATE SET lastDeletedAt=excluded.lastDeletedAt",
+          id,
+          deletedAt,
+        );
+        const purgeAt = deletedAt + CONVERSATION_RETENTION_MS;
         store.run(
           "INSERT INTO conversation_lifecycle VALUES (?,?) ON CONFLICT(conversationId) DO UPDATE SET deletedAt=excluded.deletedAt",
           id,
           deletedAt,
         );
+        store.run(
+          "INSERT INTO conversation_retention VALUES (?,?) ON CONFLICT(conversationId) DO UPDATE SET purgeAt=excluded.purgeAt",
+          id,
+          purgeAt,
+        );
         store.db.exec("COMMIT");
-        return { id, title: row.title, deletedAt };
+        return { id, title: row.title, deletedAt, purgeAt };
       } catch (error) {
         store.db.exec("ROLLBACK");
         throw error;
@@ -891,6 +1024,178 @@ export class Runtime {
       this.conversationChanges.delete(id);
     }
   }
+  private now() {
+    return this.options.now?.() ?? Date.now();
+  }
+
+  /** One serial sweep, with failures isolated so another conversation can expire. */
+  sweepConversationTrash(): Promise<void> {
+    if (this.closing) return Promise.resolve();
+    if (this.trashSweep) return this.trashSweep;
+    const work = (async () => {
+      const rows = this.store.all<{
+        conversationId: string;
+        deletedAt: number;
+      }>(
+        `SELECT conversationId,deletedAt FROM conversation_purges WHERE completedAt IS NULL
+         UNION ALL SELECT l.conversationId,l.deletedAt FROM conversation_lifecycle l
+         JOIN conversation_retention r ON r.conversationId=l.conversationId
+         WHERE l.deletedAt IS NOT NULL AND r.purgeAt<=?
+           AND l.conversationId NOT IN (SELECT conversationId FROM conversation_purges)`,
+        this.now(),
+      );
+      for (const row of rows) {
+        if (this.closing) break;
+        try {
+          await this.startConversationPurge(
+            row.conversationId,
+            row.deletedAt,
+            true,
+          );
+        } catch {
+          /* Keep the claim/deadline; retry on the next sweep or restart. */
+        }
+      }
+    })();
+    this.trashSweep = work;
+    const clear = () => {
+      if (this.trashSweep === work) this.trashSweep = undefined;
+    };
+    void work.then(clear, clear);
+    return work;
+  }
+
+  purgeConversation(
+    id: string,
+    confirmation: unknown,
+    expectedDeletedAt: unknown,
+  ) {
+    if (confirmation !== true)
+      return Promise.reject(
+        new ConversationError(
+          "Confirme explicitamente a exclusão permanente da conversa.",
+        ),
+      );
+    if (
+      typeof expectedDeletedAt !== "number" ||
+      !Number.isSafeInteger(expectedDeletedAt)
+    )
+      return Promise.reject(
+        new ConversationError("Confirme a versão atual da conversa excluída."),
+      );
+    return this.startConversationPurge(id, expectedDeletedAt, false);
+  }
+
+  private startConversationPurge(
+    id: string,
+    expectedDeletedAt: number,
+    automatic: boolean,
+  ) {
+    const work = this.performConversationPurge(
+      id,
+      expectedDeletedAt,
+      automatic,
+    );
+    this.purges.add(work);
+    void work.then(
+      () => this.purges.delete(work),
+      () => this.purges.delete(work),
+    );
+    return work;
+  }
+
+  private async performConversationPurge(
+    id: string,
+    expectedDeletedAt: number,
+    automatic: boolean,
+  ) {
+    if (this.closing) throw new ConversationBusyError("Serviço encerrando");
+    if (!/^[1-9][0-9]{0,15}$/.test(id) || !Number.isSafeInteger(Number(id)))
+      throw new ConversationError("Conversa inválida");
+    if (this.conversationChanges.has(id)) throw new ConversationBusyError();
+    this.assertHandoffAvailable(id);
+    if (
+      [...this.admissions.keys()].some((key) => key.startsWith(`${id}:`)) ||
+      this.commands.busy(id)
+    )
+      throw new ConversationBusyError(
+        "Há solicitações pendentes. Aguarde sua conclusão antes de excluir.",
+      );
+    this.conversationChanges.add(id);
+    try {
+      const cachedSession = this.harness as Harness & {
+        unloadDocuments?: () => Promise<void>;
+      };
+      if (typeof cachedSession.unloadDocuments !== "function")
+        throw new ConversationError(
+          "Versão do histórico incompatível com exclusão permanente.",
+          409,
+        );
+      await this.harness.commit(
+        () =>
+          this.durableDatabase.transaction(async (tx) => {
+            await assertDurablePurgeSafe(tx, Number(id));
+            assertAppPurgeSafe(this.store, id);
+            const claim = this.store.get<{
+              deletedAt: number;
+              completedAt: number | null;
+            }>(
+              "SELECT deletedAt,completedAt FROM conversation_purges WHERE conversationId=?",
+              id,
+            );
+            if (claim) {
+              if (!automatic || claim.deletedAt !== expectedDeletedAt)
+                throw new ConversationError(
+                  "Exclusão permanente iniciada. A conversa não pode ser recuperada.",
+                  409,
+                );
+            } else {
+              const archived = this.store.get<{
+                deletedAt: number;
+                purgeAt: number;
+              }>(
+                "SELECT l.deletedAt,r.purgeAt FROM conversation_lifecycle l JOIN conversation_retention r ON r.conversationId=l.conversationId WHERE l.conversationId=? AND l.deletedAt IS NOT NULL",
+                id,
+              );
+              if (!archived || archived.deletedAt !== expectedDeletedAt)
+                throw new ConversationError(
+                  "A conversa mudou. Atualize a lista antes de excluir permanentemente.",
+                  409,
+                );
+              if (automatic && archived.purgeAt > this.now()) return;
+              // Separate durable claim commits first. A crash cannot re-enable restoration.
+              this.store.run(
+                "INSERT INTO conversation_purges VALUES (?,?,?,NULL)",
+                id,
+                expectedDeletedAt,
+                this.now(),
+              );
+            }
+            await removeDurableHistory(tx, Number(id));
+          }),
+        context,
+      );
+      // Pinned SDK 1.0.4 implementation caches documents by address. The checked
+      // runtime eviction capability prevents stale trackers
+      // from surviving scoped SQL removal; the monotonically increasing IDs stay intact.
+      await cachedSession.unloadDocuments();
+      if (
+        this.store.get(
+          "SELECT 1 FROM conversation_purges WHERE conversationId=?",
+          id,
+        )
+      )
+        removeAppHistory(this.store, id, this.now());
+      return { id, purged: true };
+    } catch (error) {
+      if (error instanceof TrashBlockedError)
+        throw new ConversationError(error.message, 409);
+      throw error;
+    } finally {
+      this.conversationChanges.delete(id);
+    }
+  }
+
   async admit(
     conversationId: string,
     requestId: string,
@@ -1375,6 +1680,9 @@ export class Runtime {
   }
   async close() {
     this.closing = true;
+    clearInterval(this.trashTimer);
+    await this.trashSweep?.catch(() => {});
+    await Promise.allSettled(this.purges);
     await this.tasks.close();
     await this.cuaHandoffs?.close();
     await this.mcpCalls?.close();

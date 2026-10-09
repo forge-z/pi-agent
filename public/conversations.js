@@ -31,6 +31,11 @@ export function attachConversationManagementUI(api, callbacks) {
   const form = $("conversation-management-form");
   const renameFields = $("conversation-management-rename-fields");
   const deleteFields = $("conversation-management-delete-fields");
+  const deleteNotice = $("conversation-management-delete-notice");
+  const deleteDeadline = $("conversation-management-deadline");
+  const deleteAcknowledgement = $(
+    "conversation-management-delete-acknowledgement",
+  );
   const nameInput = $("conversation-management-name");
   const confirmDelete = $("conversation-management-confirm-delete");
   const submit = $("conversation-management-submit");
@@ -40,6 +45,7 @@ export function attachConversationManagementUI(api, callbacks) {
 
   let showingDeleted = false;
   let deletedConversations = [];
+  let deletedLoadVersion = 0;
   let target = null;
   let mode = null;
   let mutationInFlight = false;
@@ -56,6 +62,25 @@ export function attachConversationManagementUI(api, callbacks) {
 
   function report(error) {
     callbacks.report?.(error);
+  }
+
+  async function loadDeletedConversations() {
+    const version = ++deletedLoadVersion;
+    const conversations = await api("/api/conversations?deleted=1");
+    if (version !== deletedLoadVersion) return false;
+    deletedConversations = conversations;
+    return true;
+  }
+
+  function deadline(conversation) {
+    if (!Number.isFinite(conversation.purgeAt))
+      return t(
+        "Prazo de exclusão indisponível. Atualize a lista antes de continuar.",
+      );
+    return new Intl.DateTimeFormat(locale(), {
+      dateStyle: "medium",
+      timeStyle: "short",
+    }).format(new Date(conversation.purgeAt));
   }
 
   function handle(action, onError = report) {
@@ -122,6 +147,23 @@ export function attachConversationManagementUI(api, callbacks) {
         const label = document.createElement("span");
         label.className = "conversation-label";
         plain(label, conversation.title);
+        if (conversation.telegramLinked === true) {
+          const telegramIcon = document.createElementNS(
+            "http://www.w3.org/2000/svg",
+            "svg",
+          );
+          telegramIcon.setAttribute("class", "icon conversation-telegram-icon");
+          telegramIcon.setAttribute("aria-hidden", "true");
+          attr(telegramIcon, "title", () => t("Conversa web e Telegram"));
+          attr(select, "aria-description", () => t("Conversa web e Telegram"));
+          const use = document.createElementNS(
+            "http://www.w3.org/2000/svg",
+            "use",
+          );
+          use.setAttribute("href", "/icons.svg#telegram-logo");
+          telegramIcon.append(use);
+          select.append(telegramIcon);
+        }
         select.append(label);
         select.onclick = handle(async () => {
           callbacks.closeSidebar();
@@ -166,13 +208,34 @@ export function attachConversationManagementUI(api, callbacks) {
       row.append(actionToggle, actions);
 
       if (showingDeleted) {
+        const purgeDeadline = document.createElement("span");
+        purgeDeadline.className = "conversation-purge-deadline";
+        text(purgeDeadline, () =>
+          Number.isFinite(conversation.purgeAt)
+            ? t("Exclusão definitiva em {0}", [deadline(conversation)])
+            : deadline(conversation),
+        );
+        row.append(purgeDeadline);
         const restore = button(
           () => t("Restaurar"),
           "subtle conversation-action",
         );
         restore.setAttribute("data-conversation-id", conversation.id);
         restore.onclick = handle(() => restoreConversation(conversation));
-        actions.append(restore);
+        const purge = button(
+          () => t("Excluir agora"),
+          "subtle conversation-action",
+        );
+        purge.disabled =
+          !Number.isFinite(conversation.deletedAt) ||
+          !Number.isFinite(conversation.purgeAt);
+        purge.setAttribute("data-conversation-id", conversation.id);
+        purge.onclick = () => {
+          if (purge.disabled) return;
+          closeActions();
+          openDialog("purge", conversation);
+        };
+        actions.append(restore, purge);
       } else {
         const rename = button(
           () => t("Renomear"),
@@ -216,11 +279,11 @@ export function attachConversationManagementUI(api, callbacks) {
     mode = nextMode;
     plain(error, "");
     renameFields.hidden = mode !== "rename";
-    deleteFields.hidden = mode !== "delete";
+    deleteFields.hidden = mode === "rename";
     nameInput.required = mode === "rename";
-    confirmDelete.required = mode === "delete";
+    confirmDelete.required = mode !== "rename";
     confirmDelete.checked = false;
-    submit.disabled = mode === "delete";
+    submit.disabled = mode !== "rename";
     if (mode === "rename") {
       text($("conversation-management-title"), () => t("Renomear conversa"));
       text($("conversation-management-intro"), () =>
@@ -228,14 +291,52 @@ export function attachConversationManagementUI(api, callbacks) {
       );
       nameInput.value = conversation.title;
       text(submit, () => t("Salvar título"));
+    } else if (mode === "purge") {
+      text(deleteDeadline, () =>
+        t("Exclusão definitiva em {0}", [deadline(conversation)]),
+      );
+      text($("conversation-management-title"), () =>
+        t("Excluir definitivamente?"),
+      );
+      text($("conversation-management-intro"), () =>
+        t(
+          "A conversa ‘{0}’ e seus dados serão excluídos definitivamente agora. Essa ação não pode ser desfeita.",
+          [conversation.title],
+        ),
+      );
+      text(deleteNotice, () =>
+        t(
+          "Esta conversa não poderá mais ser restaurada. O prazo previsto era {0}.",
+          [deadline(conversation)],
+        ),
+      );
+      text(deleteAcknowledgement, () =>
+        t("Entendo que esta exclusão é definitiva e não poderá ser desfeita."),
+      );
+      text(submit, () => t("Excluir agora"));
     } else {
+      const forecast = { purgeAt: Date.now() + 7 * 24 * 60 * 60 * 1000 };
+      text(deleteDeadline, () =>
+        t(
+          "Exclusão definitiva prevista em {0}; o prazo de 7 dias começa ao confirmar.",
+          [deadline(forecast)],
+        ),
+      );
       text($("conversation-management-title"), () => t("Excluir conversa?"));
       text($("conversation-management-intro"), () =>
         t(
-          "A conversa será movida para a lista de excluídas. As tarefas serão pausadas, e o Telegram precisará ser vinculado novamente antes de continuar usando o bot.",
+          "A conversa será mantida por 7 dias e depois excluída definitivamente. As tarefas serão pausadas, e o Telegram precisará ser vinculado novamente antes de continuar usando o bot.",
         ),
       );
       text(submit, () => t("Excluir conversa"));
+      text(deleteNotice, () =>
+        t(
+          "Você poderá restaurar a conversa durante 7 dias. Depois desse prazo, ela será excluída definitivamente. A restauração não reativa tarefas nem vincula o Telegram.",
+        ),
+      );
+      text(deleteAcknowledgement, () =>
+        t("Entendo as consequências e quero excluir esta conversa."),
+      );
     }
     dialog.showModal();
     if (mode === "rename") nameInput.focus();
@@ -274,7 +375,9 @@ export function attachConversationManagementUI(api, callbacks) {
       );
     } catch (caught) {
       setDialogError(
-        () => errorText(caught.message) || t("Não foi possível renomear a conversa."),
+        () =>
+          errorText(caught.message) ||
+          t("Não foi possível renomear a conversa."),
       );
       submit.disabled = false;
       setMutationInFlight(false);
@@ -298,7 +401,7 @@ export function attachConversationManagementUI(api, callbacks) {
   }
 
   async function deleteConversation() {
-    if (!target || mode !== "delete") return;
+    if (!target || mode !== "delete" || mutationInFlight) return;
     if (!confirmDelete.checked) {
       submit.disabled = true;
       return;
@@ -314,7 +417,9 @@ export function attachConversationManagementUI(api, callbacks) {
       });
     } catch (caught) {
       setDialogError(
-        () => errorText(caught.message) || t("Não foi possível excluir a conversa."),
+        () =>
+          errorText(caught.message) ||
+          t("Não foi possível excluir a conversa."),
       );
       submit.disabled = false;
       setMutationInFlight(false);
@@ -330,15 +435,63 @@ export function attachConversationManagementUI(api, callbacks) {
     }
   }
 
+  async function purgeConversation() {
+    if (!target || mode !== "purge" || mutationInFlight) return;
+    if (!confirmDelete.checked) {
+      submit.disabled = true;
+      return;
+    }
+    const original = target;
+    submit.disabled = true;
+    setDialogError("");
+    setMutationInFlight(true);
+    try {
+      await api(
+        `/api/conversations/${encodeURIComponent(original.id)}/purge`,
+        "POST",
+        {
+          confirm: true,
+          expectedDeletedAt: original.deletedAt,
+        },
+      );
+    } catch (caught) {
+      setDialogError(
+        () =>
+          errorText(caught.message) ||
+          t("Não foi possível excluir definitivamente a conversa."),
+      );
+      submit.disabled = false;
+      setMutationInFlight(false);
+      return;
+    }
+    deletedLoadVersion++;
+    deletedConversations = deletedConversations.filter(
+      (item) => item.id !== original.id,
+    );
+    dialog.close();
+    setMutationInFlight(false);
+    render();
+    toggleView.focus();
+    try {
+      if (await loadDeletedConversations()) render();
+    } catch (caught) {
+      report(caught);
+    }
+  }
+
   async function restoreConversation(conversation) {
     await api(
       `/api/conversations/${encodeURIComponent(conversation.id)}/restore`,
       "POST",
       {},
     );
-    await callbacks.loadConversations();
-    deletedConversations = await api("/api/conversations?deleted=1");
+    deletedLoadVersion++;
+    deletedConversations = deletedConversations.filter(
+      (item) => item.id !== conversation.id,
+    );
     render();
+    await callbacks.loadConversations();
+    if (await loadDeletedConversations()) render();
     if (deletedConversations.some((item) => item.id === conversation.id))
       focusActions(conversation.id);
     else toggleView.focus();
@@ -346,16 +499,18 @@ export function attachConversationManagementUI(api, callbacks) {
 
   async function toggleDeletedView() {
     if (showingDeleted) {
+      deletedLoadVersion++;
       showingDeleted = false;
       render();
       return;
     }
-    deletedConversations = await api("/api/conversations?deleted=1");
+    if (!(await loadDeletedConversations())) return;
     showingDeleted = true;
     render();
   }
 
   function showActiveView() {
+    deletedLoadVersion++;
     showingDeleted = false;
     render();
   }
@@ -364,6 +519,7 @@ export function attachConversationManagementUI(api, callbacks) {
     event.preventDefault();
     if (mode === "rename") return renameConversation();
     if (mode === "delete") return deleteConversation();
+    if (mode === "purge") return purgeConversation();
   };
   confirmDelete.addEventListener("change", () => {
     submit.disabled = !confirmDelete.checked;
