@@ -247,6 +247,116 @@ test("revoked unpaired setup never bootstraps its old grant for invalid or valid
   }
 });
 
+test("polling preserves busy updates and offset, then retries exactly once after settings unlock", async (t) => {
+  for (const target of [
+    "anchor-message",
+    "anchor-new",
+    "anchor-start",
+    "selected-message",
+  ]) {
+    await t.test(target, async () => {
+      const f = await fixture();
+      let release: (() => void) | undefined;
+      let settings: Promise<void> | undefined;
+      try {
+        const anchor = await f.app.create("Web anchor");
+        await f.connect(anchor);
+        f.fake.push(dm(9400, "/new Inicial"));
+        await until(() => f.offset() === "9401");
+        const selected = f.app.store.get<{ conversationId: string }>(
+          "SELECT conversationId FROM telegram_chat_selection WHERE chat='42' AND user='42'",
+        )!.conversationId;
+        const busyId = target.startsWith("selected") ? selected : anchor;
+        let entered!: () => void;
+        const ready = new Promise<void>((resolve) => {
+          entered = resolve;
+        });
+        const gate = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        settings = f.app.withConversationSettings(busyId, async () => {
+          entered();
+          await gate;
+        });
+        await ready;
+        let attempts = 0;
+        const available = f.app.assertConversationAvailable.bind(f.app);
+        f.app.assertConversationAvailable = (id) => {
+          if (id === busyId) attempts++;
+          available(id);
+        };
+        const text =
+          target === "anchor-new"
+            ? "/new Retry"
+            : target === "anchor-start"
+              ? "/start"
+              : "Mensagem preservada no polling";
+        f.fake.push(dm(9401, text));
+        await until(() => attempts > 0);
+        assert.equal(f.offset(), "9401");
+        assert.equal(
+          f.app.store.get("SELECT 1 FROM telegram_poll_receipts WHERE id=9401"),
+          undefined,
+        );
+        assert.equal(
+          f.app.store.get(
+            "SELECT 1 FROM meta WHERE key='telegram:update:9401'",
+          ),
+          undefined,
+        );
+        assert.equal(
+          f.app.store.all(
+            "SELECT * FROM deliveries WHERE id LIKE 'telegram:control:9401:%'",
+          ).length,
+          0,
+        );
+        await until(
+          () => attempts >= 2,
+          "poll retry while settings remain busy",
+        );
+        assert.ok(release);
+        release();
+        release = undefined;
+        await settings;
+        settings = undefined;
+        await until(() => f.offset() === "9402", "retry accepted after unlock");
+        assert.equal(
+          f.app.store.all(
+            "SELECT * FROM telegram_poll_receipts WHERE id=9401 AND state='accepted'",
+          ).length,
+          1,
+        );
+        if (target.endsWith("message")) {
+          assert.equal(
+            f.app.store.all(
+              "SELECT * FROM requests WHERE requestId='telegram:9401'",
+            ).length,
+            1,
+          );
+          await (await f.app.conversation(selected)).waitForIdle(context);
+        }
+        if (target === "anchor-new")
+          assert.equal(
+            f.app.listConversations().filter((c) => c.title === "Retry").length,
+            1,
+          );
+        assert.equal(
+          f.app.store.all(
+            "SELECT * FROM deliveries WHERE id LIKE 'telegram:control:9401:%'",
+          ).length,
+          0,
+        );
+        await f.restart();
+        assert.equal(f.offset(), "9402");
+      } finally {
+        release?.();
+        await settings;
+        await f.close();
+      }
+    });
+  }
+});
+
 test("configured Telegram owner receives new/relink guidance after deleting every conversation and can explicitly link a fresh web anchor", async () => {
   const f = await fixture();
   try {
