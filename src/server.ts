@@ -353,6 +353,25 @@ export function createAppServer(app: Runtime, options: ServerOptions) {
             });
           }
         }
+        if (path === "/api/provider/connections" && method === "GET")
+          return json(response, 200, app.providerConnections.list());
+        if (
+          (path === "/api/provider/connections" ||
+            path === "/api/provider/connections/models") &&
+          method === "POST"
+        ) {
+          if (app.options.mode !== "live")
+            throw new HttpError(
+              409,
+              "Ative APP_MODE=live para conectar o provider",
+            );
+          const input = await body(request);
+          return path.endsWith("/models")
+            ? json(response, 200, await app.providerConnections.discover(input))
+            : json(response, 201, {
+                connection: await app.providerConnections.create(input),
+              });
+        }
         if (path === "/api/provider/login" && method === "POST") {
           if (app.options.mode !== "live")
             throw new HttpError(
@@ -728,6 +747,10 @@ export function createAppServer(app: Runtime, options: ServerOptions) {
           "text/javascript",
         ],
         "/settings.js": ["settings.js", "text/javascript"],
+        "/provider-connections.js": [
+          "provider-connections.js",
+          "text/javascript",
+        ],
         "/telegram.js": ["telegram.js", "text/javascript"],
         "/tools.js": ["tools.js", "text/javascript"],
         "/cua-handoffs.js": ["cua-handoffs.js", "text/javascript"],

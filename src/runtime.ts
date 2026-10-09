@@ -56,6 +56,7 @@ import {
 import { McpCalls, type McpCall } from "./mcp-calls.js";
 import { CuaHandoffs, type CuaViewerFactory } from "./cua-handoffs.js";
 import { Settings, SettingsError } from "./settings.js";
+import { ProviderConnections } from "./provider-connections.js";
 import { Tasks, TaskError } from "./tasks.js";
 import { queueTaskTelegram } from "./task-telegram.js";
 import {
@@ -105,6 +106,7 @@ export class Runtime {
   readonly actions: Actions;
   readonly models: MutableModels;
   readonly settings: Settings;
+  readonly providerConnections: ProviderConnections;
   readonly tasks: Tasks;
   readonly commands: Commands;
   readonly telegramChats: TelegramChats;
@@ -193,6 +195,23 @@ export class Runtime {
         this.models.setProvider(faux.provider);
       }
     }
+    this.providerConnections = new ProviderConnections(
+      this.models,
+      this.store,
+      async () => {
+        const active = await this.harness.inspect(context);
+        if (
+          active.tasks.length ||
+          this.store.providerAdmissions ||
+          this.store.get("SELECT 1 FROM requests WHERE status='pending'")
+        )
+          throw new SettingsError(
+            "Aguarde as conversas e tarefas concluírem antes de alterar credenciais",
+          );
+      },
+      options.mode ?? "demo",
+    );
+    this.providerConnections.restore();
     this.settings = new Settings(this);
     this.tasks = new Tasks(this);
     this.telegramChats = new TelegramChats(this);
