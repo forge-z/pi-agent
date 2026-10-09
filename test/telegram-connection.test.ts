@@ -314,7 +314,7 @@ test("Telegram setup status is authenticated and available without environment c
   }
 });
 
-test("private polling binds only the explicit user and shares the selected conversation; duplicates and restart preserve the offset", async () => {
+test("private polling binds only the explicit user and separates Telegram context; duplicates and restart preserve the offset", async () => {
   const f = await fixture();
   try {
     const id = await f.app.create("Web + Telegram");
@@ -326,7 +326,7 @@ test("private polling binds only the explicit user and shares the selected conve
     );
     assert.equal((await f.connect(id)).state, "connected");
     await until(() => f.offset() === "5", "durable offset");
-    assert.equal(f.app.store.all("SELECT * FROM telegram_grants").length, 1);
+    assert.equal(f.app.store.all("SELECT * FROM telegram_grants").length, 2);
     assert.equal(
       f.app.store.get<{ conversationId: string }>(
         "SELECT * FROM telegram WHERE chat='42'",
@@ -557,7 +557,7 @@ test("admission survives checkpoint storage failure and restart without losing l
         .length,
       1,
     );
-    assert.equal(f.app.store.all("SELECT * FROM telegram_grants").length, 1);
+    assert.equal(f.app.store.all("SELECT * FROM telegram_grants").length, 2);
   } finally {
     await f.close();
   }
@@ -972,6 +972,7 @@ test("native command menu uses only the confirmed private chat, preserves global
     assert.deepEqual(
       telegramCommandCatalog.map((c) => c.command),
       [
+        "chats",
         "agents",
         "model",
         "thinking",

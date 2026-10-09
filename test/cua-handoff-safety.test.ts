@@ -289,6 +289,7 @@ test("held owner decisions are blocked before any row mutation through HTTP, Tel
       ["9"],
     );
     app.store.run("INSERT INTO telegram VALUES ('9',?,'7')", id);
+    app.store.run("INSERT INTO telegram_grants VALUES ('9','7',?)", id);
     for (const [n, decision] of ["approve", "deny"].entries())
       await assert.rejects(
         telegram.receive({

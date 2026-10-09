@@ -170,13 +170,14 @@ export class Telegram {
       chat,
     );
     let response: unknown;
+    let conversationId = linked?.conversationId;
     let errorReply: string | undefined;
     const pairing = /^\/(link|start)(?:\s+([\s\S]*))?$/.exec(text);
     if (pairing?.[1] === "start" && !pairing[2]) {
       errorReply =
         linked?.user === user
           ? this.privateDm
-            ? "Conectado. O histórico é compartilhado com a web. Use /help para consultar os comandos."
+            ? "Conectado. As mensagens usam conversas exclusivas do Telegram; o histórico antigo permanece na web. Use /chats para gerenciar as conversas."
             : "Conversa vinculada. Use /help para consultar os comandos. Para vincular outra conversa, gere um código na interface web."
           : "Abra a conversa na interface web, escolha Vincular Telegram e envie /link CODIGO aqui. O código é de uso único e expira em 10 minutos.";
       response = { info: errorReply };
@@ -208,18 +209,58 @@ export class Telegram {
         throw new TelegramInputError(
           "Vincule esta conversa na interface web com /link CODIGO",
         );
+      this.app.telegramChats.binding({ chat, user });
+      const selected = this.app.store.get<{ conversationId: string }>(
+        "SELECT conversationId FROM telegram_chat_selection WHERE chat=? AND user=?",
+        chat,
+        user,
+      )?.conversationId;
+      if (selected) this.app.assertHandoffAvailable(selected);
+      const management = /^\/chats(?:\s|$)/.test(text);
+      if (management) {
+        // A revoked/archived selection may be replaced explicitly with /chats.
+        conversationId =
+          selected &&
+          this.app.telegramChats.owns(selected, { chat, user }) &&
+          !this.app.store.conversationDeleted(selected)
+            ? selected
+            : linked.conversationId;
+      } else {
+        const prior = this.app.store.get<{ conversationId: string }>(
+          "SELECT conversationId FROM requests WHERE requestId=? AND source='telegram' AND chat=?",
+          `telegram:${update.update_id}`,
+          chat,
+        );
+        conversationId =
+          prior?.conversationId ??
+          this.app.telegramChats.selected({ chat, user });
+        if (!conversationId) {
+          // Migrate normal messages on first use; command-only operations retain
+          // access to the old binding until a dedicated conversation exists.
+          conversationId =
+            !text.trimStart().startsWith("/") ||
+            text.trimStart().startsWith("//")
+              ? await this.app.telegramChats.ensure({ chat, user })
+              : linked.conversationId;
+        }
+        this.app.commands.authorize(conversationId, {
+          source: "telegram",
+          chat,
+          user,
+        });
+      }
       const decision = /^\/(approve|deny)\s+([a-f0-9]{24})$/.exec(text);
       if (decision) {
         if (
           !this.app.store.get(
             "SELECT id FROM actions WHERE id=? AND conversationId=?",
             decision[2],
-            linked.conversationId,
+            conversationId!,
           )
         )
           throw new TelegramInputError("Ação não encontrada nesta conversa");
         const action = await this.app.actions.decide(
-          linked.conversationId,
+          conversationId!,
           decision[2],
           decision[1] === "approve" ? "approve" : "deny",
           signal,
@@ -237,7 +278,7 @@ export class Telegram {
           this.app.store.run(
             "INSERT OR IGNORE INTO delivery_conversations VALUES (?,?)",
             `decision:${update.update_id}`,
-            linked.conversationId,
+            conversationId!,
           );
           this.app.store.db.exec("RELEASE SAVEPOINT decision_delivery");
         } catch (error) {
@@ -249,7 +290,7 @@ export class Telegram {
       } else {
         try {
           response = await this.app.admit(
-            linked.conversationId,
+            conversationId!,
             `telegram:${update.update_id}`,
             text,
             { source: "telegram", chat, user },
@@ -279,7 +320,7 @@ export class Telegram {
           this.app.store.run(
             "INSERT OR IGNORE INTO delivery_conversations VALUES (?,?)",
             `command:telegram:${update.update_id}:0`,
-            linked.conversationId,
+            conversationId!,
           );
       }
       this.app.store.run(

@@ -347,8 +347,13 @@ test("Telegram pairing normalization preserves the contents and whitespace of an
     const tg = f.telegram();
     await tg.receive(update(1, `/link ${f.app.store.link(id)}`));
     f.faux.setResponses([fauxAssistantMessage("Literal recebido")]);
-    await tg.receive(update(2, "  //help@test_pi_bot\n"));
-    await (await f.app.conversation(id)).waitForIdle(context);
+    const admitted = (await tg.receive(
+      update(2, "  //help@test_pi_bot\n"),
+    )) as { conversationId: string };
+    assert.notEqual(admitted.conversationId, id);
+    await (
+      await f.app.conversation(admitted.conversationId)
+    ).waitForIdle(context);
     assert.equal(
       f.app.store.get<{ text: string }>(
         "SELECT text FROM requests WHERE requestId='telegram:2'",
