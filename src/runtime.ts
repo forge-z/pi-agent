@@ -52,6 +52,26 @@ export interface RuntimeOptions {
   modelId?: string;
   provider?: string;
 }
+export class ConversationError extends Error {
+  constructor(
+    message: string,
+    readonly status = 400,
+  ) {
+    super(message);
+  }
+}
+function conversationTitle(value: unknown) {
+  if (
+    typeof value !== "string" ||
+    !value.trim() ||
+    value.trim().length > 100 ||
+    /[\u0000-\u001f\u007f-\u009f]/.test(value)
+  )
+    throw new ConversationError(
+      "Título inválido: use de 1 a 100 caracteres, sem quebras de linha.",
+    );
+  return value.trim();
+}
 export class Runtime {
   readonly store: Store;
   readonly actions: Actions;
@@ -74,6 +94,7 @@ export class Runtime {
     }
   >();
   private closing = false;
+  private conversationChanges = new Set<string>();
   private constructor(readonly options: RuntimeOptions) {
     this.store = new Store(options.dir);
     this.actions = new Actions(this.store, options.gateway);
@@ -416,6 +437,7 @@ export class Runtime {
     );
   }
   async create(title = "Nova conversa") {
+    title = conversationTitle(title);
     const defaults = this.settings.defaults();
     const conversation = await this.harness.createConversation(
       {
@@ -435,11 +457,12 @@ export class Runtime {
     this.store.run(
       "INSERT INTO conversations VALUES (?,?)",
       String(conversation.id),
-      title.slice(0, 100),
+      title,
     );
     return String(conversation.id);
   }
   async conversation(id: string) {
+    this.assertConversationAvailable(id);
     if (!/^[1-9][0-9]{0,15}$/.test(id)) throw new Error("Conversa inválida");
     const conversation = await this.harness.conversation(
       Number(id) as ConversationId,
@@ -447,6 +470,185 @@ export class Runtime {
     );
     if (!conversation) throw new Error("Conversa não encontrada");
     return conversation;
+  }
+  assertConversationAvailable(id: string) {
+    if (this.store.conversationDeleted(id))
+      throw new ConversationError(
+        "Conversa excluída. Recupere-a antes de continuar.",
+        409,
+      );
+    if (this.conversationChanges.has(id))
+      throw new ConversationError(
+        "Conversa em atualização. Tente novamente.",
+        409,
+      );
+  }
+  listConversations(deleted = false) {
+    return this.store.all<{
+      id: string;
+      title: string;
+      deletedAt: number | null;
+    }>(
+      `SELECT c.id,c.title,l.deletedAt FROM conversations c LEFT JOIN conversation_lifecycle l ON l.conversationId=c.id WHERE l.deletedAt IS ${deleted ? "NOT " : ""}NULL ORDER BY c.rowid DESC`,
+    );
+  }
+  renameConversation(id: string, title: unknown) {
+    this.assertConversationAvailable(id);
+    const value = conversationTitle(title);
+    this.store.db.exec("SAVEPOINT rename_conversation");
+    try {
+      if (
+        !this.store.run(
+          "UPDATE conversations SET title=? WHERE id=?",
+          value,
+          id,
+        ).changes
+      )
+        throw new ConversationError("Conversa não encontrada", 404);
+      this.store.run(
+        "INSERT OR IGNORE INTO conversation_titles VALUES (?)",
+        id,
+      );
+      this.store.db.exec("RELEASE SAVEPOINT rename_conversation");
+    } catch (error) {
+      this.store.db.exec("ROLLBACK TO SAVEPOINT rename_conversation");
+      this.store.db.exec("RELEASE SAVEPOINT rename_conversation");
+      throw error;
+    }
+    return { id, title: value, deletedAt: null };
+  }
+  restoreConversation(id: string) {
+    if (this.conversationChanges.has(id))
+      throw new ConversationError("Conversa em atualização", 409);
+    const row = this.store.get<{ title: string }>(
+      "SELECT title FROM conversations WHERE id=?",
+      id,
+    );
+    if (!row) throw new ConversationError("Conversa não encontrada", 404);
+    this.store.run(
+      "DELETE FROM conversation_lifecycle WHERE conversationId=?",
+      id,
+    );
+    return { id, title: row.title, deletedAt: null };
+  }
+  async deleteConversation(id: string) {
+    this.assertConversationAvailable(id);
+    if (
+      [...this.admissions.keys()].some((key) => key.startsWith(`${id}:`)) ||
+      this.commands.busy(id)
+    )
+      throw new ConversationError(
+        "Há solicitações pendentes. Aguarde sua conclusão antes de excluir.",
+        409,
+      );
+    this.conversationChanges.add(id);
+    try {
+      const inspection = await this.harness.inspect(context);
+      if (
+        inspection.tasks.some(
+          ({ record }) =>
+            String(record.conversationId) === id &&
+            record.state.status !== "terminal",
+        )
+      )
+        throw new ConversationError(
+          "Há execução pendente. Aguarde sua conclusão antes de excluir.",
+          409,
+        );
+      const store = this.store;
+      store.db.exec("BEGIN IMMEDIATE");
+      try {
+        const row = store.get<{ title: string }>(
+          "SELECT title FROM conversations WHERE id=?",
+          id,
+        );
+        if (!row) throw new ConversationError("Conversa não encontrada", 404);
+        const blocked =
+          store.get(
+            "SELECT 1 FROM requests WHERE conversationId=? AND status='pending'",
+            id,
+          ) ||
+          store.get(
+            "SELECT 1 FROM actions WHERE conversationId=? AND state IN ('pending','running','uncertain')",
+            id,
+          ) ||
+          store.get(
+            "SELECT 1 FROM command_receipts WHERE conversationId=? AND state IN ('pending','uncertain')",
+            id,
+          ) ||
+          store.get(
+            "SELECT 1 FROM task_runs r JOIN tasks t ON t.id=r.taskId WHERE t.conversationId=? AND r.state='pending'",
+            id,
+          ) ||
+          (store.get("SELECT 1 FROM sqlite_master WHERE name='mcp_calls'") &&
+            (store.get(
+              "SELECT 1 FROM mcp_calls WHERE conversationId=? AND state IN ('running','paused','uncertain')",
+              id,
+            ) ||
+              store.get(
+                "SELECT 1 FROM mcp_interactions WHERE conversationId=? AND state='pending'",
+                id,
+              )));
+        if (blocked)
+          throw new ConversationError(
+            "Há operação pendente ou resultado externo sem resolução. Resolva antes de excluir.",
+            409,
+          );
+        // Legacy deliveries had no owner column; match their durable aliases and
+        // conservatively protect the currently revoked chat as well.
+        const deliveries = `SELECT d.id FROM deliveries d WHERE
+          d.id IN (SELECT deliveryId FROM delivery_conversations WHERE conversationId=?)
+          OR substr(d.id,1,?)=?
+          OR d.id IN (SELECT p.deliveryId FROM task_notification_parts p JOIN task_notifications n ON n.id=p.notificationId WHERE n.conversationId=?)
+          OR EXISTS (SELECT 1 FROM command_receipts r WHERE r.conversationId=? AND substr(d.id,1,length('command:'||r.requestId||':'))='command:'||r.requestId||':')
+          OR EXISTS (SELECT 1 FROM meta m WHERE d.id GLOB 'decision:*' AND m.key='telegram:update:'||substr(d.id,10)
+            AND CASE WHEN json_valid(m.value) THEN json_extract(m.value,'$.conversationId')=? ELSE 0 END)
+          OR (d.chat IN (SELECT chat FROM telegram WHERE conversationId=?)
+            AND NOT EXISTS (SELECT 1 FROM delivery_conversations o WHERE o.deliveryId=d.id)
+            AND NOT EXISTS (SELECT 1 FROM task_notification_parts p WHERE p.deliveryId=d.id)
+            AND NOT EXISTS (SELECT 1 FROM command_receipts r WHERE substr(d.id,1,length('command:'||r.requestId||':'))='command:'||r.requestId||':')
+            AND d.id NOT GLOB '[0-9]*:*')`;
+        const args = [id, id.length + 1, `${id}:`, id, id, id, id];
+        if (
+          store.get(
+            `SELECT 1 FROM deliveries WHERE state IN ('sending','uncertain') AND id IN (${deliveries})`,
+            ...args,
+          )
+        )
+          throw new ConversationError(
+            "Há entrega em execução ou sem resolução. Verifique antes de excluir.",
+            409,
+          );
+        store.run(
+          `UPDATE deliveries SET state='cancelled',result='Conversa excluída antes do envio.' WHERE state='pending' AND id IN (${deliveries})`,
+          ...args,
+        );
+        store.run(
+          "UPDATE tasks SET enabled=0,nextRun=NULL WHERE conversationId=?",
+          id,
+        );
+        store.run("DELETE FROM links WHERE conversationId=?", id);
+        store.run("DELETE FROM telegram WHERE conversationId=?", id);
+        store.run("DELETE FROM telegram_grants WHERE conversationId=?", id);
+        store.run(
+          "INSERT OR IGNORE INTO telegram_initial_revocations VALUES (?)",
+          id,
+        );
+        const deletedAt = Date.now();
+        store.run(
+          "INSERT INTO conversation_lifecycle VALUES (?,?) ON CONFLICT(conversationId) DO UPDATE SET deletedAt=excluded.deletedAt",
+          id,
+          deletedAt,
+        );
+        store.db.exec("COMMIT");
+        return { id, title: row.title, deletedAt };
+      } catch (error) {
+        store.db.exec("ROLLBACK");
+        throw error;
+      }
+    } finally {
+      this.conversationChanges.delete(id);
+    }
   }
   async admit(
     conversationId: string,
@@ -543,6 +745,7 @@ export class Runtime {
       throw new SettingsError(
         "Conecte sua conta ChatGPT antes de enviar mensagens ou executar tarefas",
       );
+    this.assertConversationAvailable(conversationId);
     this.store.run(
       "INSERT OR IGNORE INTO requests(conversationId,requestId,text,source,chat) VALUES (?,?,?,?,?)",
       conversationId,
@@ -568,7 +771,7 @@ export class Runtime {
     );
     if (source !== "system")
       this.store.run(
-        "UPDATE conversations SET title=? WHERE id=? AND title IN ('Nova conversa','Conversa recuperada')",
+        "UPDATE conversations SET title=? WHERE id=? AND title IN ('Nova conversa','Conversa recuperada') AND id NOT IN (SELECT conversationId FROM conversation_titles)",
         text.trim().replace(/\s+/g, " ").slice(0, 60),
         conversationId,
       );
@@ -686,6 +889,7 @@ export class Runtime {
       );
   }
   async recordAction(action: Action) {
+    if (this.store.conversationDeleted(action.conversationId)) return;
     if (
       ["done", "failed", "denied", "uncertain", "reconciled"].includes(
         action.state,
@@ -699,6 +903,7 @@ export class Runtime {
       );
   }
   async recordMcpOutcome(call: McpCall) {
+    if (this.store.conversationDeleted(call.conversationId)) return;
     if (
       ["done", "failed", "uncertain", "reconciled", "abandoned"].includes(
         call.state,

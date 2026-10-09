@@ -44,6 +44,10 @@ export class Store {
     );
     this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;
       CREATE TABLE IF NOT EXISTS conversations(id TEXT PRIMARY KEY, title TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS conversation_lifecycle(conversationId TEXT PRIMARY KEY,deletedAt INTEGER);
+      CREATE TABLE IF NOT EXISTS conversation_titles(conversationId TEXT PRIMARY KEY);
+      CREATE TABLE IF NOT EXISTS telegram_initial_revocations(conversationId TEXT PRIMARY KEY);
+      CREATE TABLE IF NOT EXISTS delivery_conversations(deliveryId TEXT PRIMARY KEY,conversationId TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS requests(conversationId TEXT, requestId TEXT, text TEXT, submissionId INTEGER, source TEXT, chat TEXT, status TEXT DEFAULT 'pending', PRIMARY KEY(conversationId,requestId));
       CREATE TABLE IF NOT EXISTS actions(id TEXT PRIMARY KEY, conversationId TEXT, server TEXT, tool TEXT, args TEXT, state TEXT DEFAULT 'pending', result TEXT, evidence TEXT DEFAULT '{}');
       CREATE TABLE IF NOT EXISTS reads(conversationId TEXT PRIMARY KEY, result TEXT);
@@ -130,7 +134,10 @@ export class Store {
     chat: string,
     text: string,
     legacyLimit = 3500,
+    conversationId?: string,
   ) {
+    conversationId ??= /^([1-9]\d*):/.exec(prefix)?.[1];
+    if (conversationId && this.conversationDeleted(conversationId)) return;
     // A request partially queued by the previous version must retain its old
     // boundaries and plain-text payloads; changing them could repeat content.
     const prior = this.all<Delivery>(
@@ -152,15 +159,21 @@ export class Store {
     // A savepoint keeps this batch atomic both inside and outside that transaction.
     this.db.exec("SAVEPOINT telegram_delivery_batch");
     try {
-      chunks.forEach((chunk, index) =>
+      chunks.forEach((chunk, index) => {
         this.run(
           "INSERT OR IGNORE INTO deliveries(id,chat,text,parseMode) VALUES (?,?,?,?)",
           `${prefix}:${index}`,
           chat,
           chunk,
           legacy ? null : "HTML",
-        ),
-      );
+        );
+        if (conversationId)
+          this.run(
+            "INSERT OR IGNORE INTO delivery_conversations VALUES (?,?)",
+            `${prefix}:${index}`,
+            conversationId,
+          );
+      });
       this.db.exec("RELEASE SAVEPOINT telegram_delivery_batch");
     } catch (error) {
       this.db.exec("ROLLBACK TO SAVEPOINT telegram_delivery_batch");
@@ -174,7 +187,15 @@ export class Store {
       conversationId,
     );
   }
+  conversationDeleted(id: string) {
+    return !!this.get(
+      "SELECT 1 FROM conversation_lifecycle WHERE conversationId=? AND deletedAt IS NOT NULL",
+      id,
+    );
+  }
   link(conversationId: string) {
+    if (this.conversationDeleted(conversationId))
+      throw new Error("Conversa excluída");
     const code = randomBytes(16).toString("hex");
     this.run(
       "INSERT INTO links VALUES (?,?,?)",
@@ -193,6 +214,8 @@ export class Store {
         Date.now(),
       );
       if (!link) throw new Error("Código de vínculo inválido ou expirado");
+      if (this.conversationDeleted(link.conversationId))
+        throw new Error("Código de vínculo inválido ou expirado");
       this.run(
         "INSERT INTO telegram VALUES (?,?,?) ON CONFLICT(chat) DO UPDATE SET conversationId=excluded.conversationId,user=excluded.user",
         chat,
@@ -217,6 +240,11 @@ export class Store {
           `link:${updateKey}`,
           chat,
           "Conversa vinculada. O histórico é compartilhado com a web. Use /help para consultar os comandos.",
+        );
+        this.run(
+          "INSERT OR IGNORE INTO delivery_conversations VALUES (?,?)",
+          `link:${updateKey}`,
+          link.conversationId,
         );
       }
       this.db.exec("COMMIT");

@@ -1,3 +1,22 @@
+const { t, text, attr, plain } = globalThis.PiI18n || {
+  t: (source, values = []) =>
+    source.replace(/\{(\d+)\}/g, (match, index) =>
+      index < values.length ? String(values[index]) : match,
+    ),
+  text: (element, render) => {
+    element.textContent = typeof render === "function" ? render() : render;
+    return element;
+  },
+  attr: (element, name, render) =>
+    element.setAttribute(
+      name,
+      typeof render === "function" ? render() : render,
+    ),
+  plain: (element, value) => {
+    element.textContent = value;
+  },
+  locale: () => "pt-BR",
+};
 const PREFERENCE_KEY = "pi:tool-details";
 
 export function attachToolVisibility({
@@ -12,12 +31,13 @@ export function attachToolVisibility({
     // The control remains usable when browser storage is unavailable.
   }
   function apply() {
-    button.setAttribute("aria-label", "Mostrar chamadas de ferramentas");
+    attr(button, "aria-label", () => t("Mostrar chamadas de ferramentas"));
     button.setAttribute("aria-pressed", String(shown));
     button.setAttribute("aria-controls", messages.id || "messages");
-    button.setAttribute(
-      "title",
-      `${shown ? "Ocultar" : "Exibir"} chamadas de ferramentas. Aprovações e erros continuam visíveis.`,
+    attr(button, "title", () =>
+      t("{0} chamadas de ferramentas. Aprovações e erros continuam visíveis.", [
+        shown ? t("Ocultar") : t("Exibir"),
+      ]),
     );
     for (const detail of messages.querySelectorAll("[data-tool-detail]")) {
       detail.hidden = !shown && detail.dataset.toolImportant !== "true";
@@ -64,7 +84,12 @@ export function createToolCalls(
       const summary = document.createElement("summary");
       summary.className = "speaker";
       const label = document.createElement("span");
-      label.textContent = `Chamada · ${block.name || "Ferramenta"}${live ? " · Em andamento" : ""}`;
+      text(label, () =>
+        t("Chamada · {0}{1}", [
+          block.name || t("Ferramenta"),
+          live ? t(" · Em andamento") : "",
+        ]),
+      );
       summary.append(icon("plug"), label);
       const body = document.createElement("div");
       body.className = "message-body";
@@ -72,7 +97,7 @@ export function createToolCalls(
         const text = JSON.stringify(block.arguments ?? {}, null, 2);
         if (renderText) return renderText(text);
         const args = document.createElement("pre");
-        args.textContent = text.slice(0, 32768);
+        plain(args, text.slice(0, 32768));
         return args;
       });
       details.append(summary, body);

@@ -226,12 +226,25 @@ export class Telegram {
         );
         if (action.state === "running") return { processing: true };
         await this.app.recordAction(action);
-        this.app.store.run(
-          "INSERT OR IGNORE INTO deliveries(id,chat,text) VALUES (?,?,?)",
-          `decision:${update.update_id}`,
-          chat,
-          `Ação ${action.id}: ${action.state}. ${action.state === "uncertain" ? "Verifique o serviço externo; a ação não será repetida automaticamente." : ""}`,
-        );
+        this.app.store.db.exec("SAVEPOINT decision_delivery");
+        try {
+          this.app.store.run(
+            "INSERT OR IGNORE INTO deliveries(id,chat,text) VALUES (?,?,?)",
+            `decision:${update.update_id}`,
+            chat,
+            `Ação ${action.id}: ${action.state}. ${action.state === "uncertain" ? "Verifique o serviço externo; a ação não será repetida automaticamente." : ""}`,
+          );
+          this.app.store.run(
+            "INSERT OR IGNORE INTO delivery_conversations VALUES (?,?)",
+            `decision:${update.update_id}`,
+            linked.conversationId,
+          );
+          this.app.store.db.exec("RELEASE SAVEPOINT decision_delivery");
+        } catch (error) {
+          this.app.store.db.exec("ROLLBACK TO SAVEPOINT decision_delivery");
+          this.app.store.db.exec("RELEASE SAVEPOINT decision_delivery");
+          throw error;
+        }
         response = action;
       } else {
         try {
@@ -255,13 +268,20 @@ export class Telegram {
     }
     this.app.store.db.exec("BEGIN IMMEDIATE");
     try {
-      if (errorReply)
+      if (errorReply) {
         this.app.store.run(
           "INSERT OR IGNORE INTO deliveries(id,chat,text) VALUES (?,?,?)",
           `command:telegram:${update.update_id}:0`,
           chat,
           errorReply,
         );
+        if (linked)
+          this.app.store.run(
+            "INSERT OR IGNORE INTO delivery_conversations VALUES (?,?)",
+            `command:telegram:${update.update_id}:0`,
+            linked.conversationId,
+          );
+      }
       this.app.store.run(
         "INSERT OR IGNORE INTO meta VALUES (?,?)",
         commandKey,

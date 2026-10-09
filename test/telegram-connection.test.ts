@@ -203,6 +203,75 @@ async function fixture(
   };
 }
 
+test("archive revokes an unpaired Telegram setup across restore until an explicit new link", async () => {
+  const f = await fixture();
+  try {
+    const id = await f.app.create("Antes");
+    await f.connect(id);
+    assert.equal(f.manager.snapshot().conversationTitle, "Antes");
+    f.app.renameConversation(id, "Depois");
+    assert.equal(f.manager.snapshot().conversationTitle, "Depois");
+    await f.app.deleteConversation(id);
+    assert.equal(f.manager.snapshot().conversationId, null);
+    f.app.restoreConversation(id);
+    f.fake.push(dm(9001, "Não reconectar automaticamente"));
+    await until(() => f.offset() === "9002");
+    assert.equal(f.app.store.all("SELECT * FROM telegram").length, 0);
+    assert.equal(f.app.store.all("SELECT * FROM requests").length, 0);
+    await f.connect(id);
+    f.fake.push(dm(9002, "Vínculo explicitamente novo"));
+    await until(() => f.offset() === "9003");
+    assert.equal(f.app.store.all("SELECT * FROM telegram").length, 1);
+  } finally {
+    await f.close();
+  }
+});
+
+test("archive suppresses bound Telegram ingress while an explicit new link remains usable", async () => {
+  const f = await fixture();
+  try {
+    const id = await f.app.create("Vinculada");
+    const other = await f.app.create("Outra");
+    await f.connect(id);
+    f.fake.push(dm(9101, "/help"));
+    await until(() => f.offset() === "9102");
+    await until(
+      () =>
+        f.app.store.get<{ state: string }>(
+          "SELECT state FROM deliveries WHERE id='command:telegram:9101:0'",
+        )?.state === "sent",
+    );
+    await f.app.deleteConversation(id);
+    const before = f.app.store.all("SELECT * FROM deliveries").length;
+    f.fake.push(dm(9102, "/help"));
+    await until(() => f.offset() === "9103");
+    assert.equal(f.app.store.all("SELECT * FROM deliveries").length, before);
+    f.app.restoreConversation(id);
+    f.fake.push(dm(9103, "Ainda não vincular automaticamente"));
+    await until(() => f.offset() === "9104");
+    assert.equal(f.app.store.all("SELECT * FROM deliveries").length, before);
+    const code = f.app.store.link(other);
+    f.fake.push(dm(9104, `/link ${code}`));
+    await until(() => f.offset() === "9105");
+    assert.equal(
+      f.app.store.get<{ conversationId: string }>(
+        "SELECT conversationId FROM telegram WHERE chat='42'",
+      )?.conversationId,
+      other,
+    );
+    f.fake.push(dm(9105, "/help"));
+    await until(() => f.offset() === "9106");
+    assert.ok(
+      f.app.store.get(
+        "SELECT 1 FROM command_receipts WHERE conversationId=? AND requestId='telegram:9105'",
+        other,
+      ),
+    );
+  } finally {
+    await f.close();
+  }
+});
+
 test("Telegram setup status is authenticated and available without environment credentials", async () => {
   const dir = await mkdtemp(join(tmpdir(), "pi-telegram-connection-"));
   const app = await Runtime.open({

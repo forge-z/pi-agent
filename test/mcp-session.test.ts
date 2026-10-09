@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
+import type { ServerResponse } from "node:http";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,7 +10,7 @@ import { McpCalls } from "../src/mcp-calls.js";
 import { Store } from "../src/store.js";
 import { Actions } from "../src/actions.js";
 
-async function fixture() {
+async function fixture(legacySse = false) {
   let session = "";
   let initializes = 0;
   let writes = 0;
@@ -18,15 +19,35 @@ async function fixture() {
   let loseWrite = false;
   let loseRead = false;
   let rejectLists = false;
+  let missingLists = false;
+  let missingListPage = false;
   let loseInitialization = false;
   let gets = 0;
   let paginate = false;
   let losePage = false;
+  let metadata: "output" | "required" | undefined;
+  let recoveredMetadataOnly = false;
   let waitWrite: Promise<void> | undefined;
   let releaseWrite: (() => void) | undefined;
   let startedWrite: (() => void) | undefined;
+  let waitList: Promise<void> | undefined;
+  let releaseList: (() => void) | undefined;
+  let startedList: (() => void) | undefined;
   const requests: { method: string; session: string | undefined }[] = [];
+  const streams = new Map<string, ServerResponse>();
   const server = createServer(async (req, res) => {
+    if (legacySse && req.method === "GET" && !initial404) {
+      gets++;
+      session = `session-${initializes + 1}`;
+      streams.set(session, res);
+      res.writeHead(200, { "Content-Type": "text/event-stream" });
+      res.write(`event: endpoint\ndata: /messages?session=${session}\n\n`);
+      return;
+    }
+    if (legacySse && req.url === "/mcp" && req.method === "POST") {
+      res.writeHead(405).end();
+      return;
+    }
     if (req.method !== "POST") {
       gets++;
       res.writeHead(initial404 ? 404 : 405).end("private upstream message");
@@ -35,7 +56,10 @@ async function fixture() {
     const chunks = [];
     for await (const chunk of req) chunks.push(chunk);
     const body = JSON.parse(Buffer.concat(chunks).toString());
-    const sid = req.headers["mcp-session-id"] as string | undefined;
+    const sid = legacySse
+      ? (new URL(req.url!, "http://localhost").searchParams.get("session") ??
+        undefined)
+      : (req.headers["mcp-session-id"] as string | undefined);
     requests.push({ method: body.method, session: sid });
     if (initial404 || (body.method !== "initialize" && sid !== session)) {
       res.writeHead(404).end("secret endpoint and token must never leak");
@@ -43,9 +67,9 @@ async function fixture() {
     }
     let result: unknown;
     if (body.method === "initialize") {
-      assert.equal(sid, undefined);
+      if (!legacySse) assert.equal(sid, undefined);
       session = `session-${++initializes}`;
-      res.setHeader("Mcp-Session-Id", session);
+      if (!legacySse) res.setHeader("Mcp-Session-Id", session);
       result = {
         protocolVersion: body.params.protocolVersion,
         capabilities: { tools: {} },
@@ -60,6 +84,18 @@ async function fixture() {
       res.writeHead(202).end();
       return;
     } else if (body.method === "tools/list") {
+      startedList?.();
+      await waitList;
+      if (missingLists || (missingListPage && body.params?.cursor)) {
+        res.writeHead(200, { "Content-Type": "application/json" }).end(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: body.id,
+            error: { code: -32601, message: "Method not found" },
+          }),
+        );
+        return;
+      }
       if (rejectLists) {
         session = "expired";
         res.writeHead(404).end("expired catalog");
@@ -71,12 +107,30 @@ async function fixture() {
         res.writeHead(404).end("page session expired");
         return;
       }
+      const enabledMetadata =
+        !recoveredMetadataOnly || initializes > 1 ? metadata : undefined;
       result = paginate
         ? {
             tools: [
               {
-                name: `${body.params?.cursor ? "second" : "first"}-${initializes}`,
+                name: metadata
+                  ? body.params?.cursor
+                    ? "execute"
+                    : "lookup"
+                  : `${body.params?.cursor ? "second" : "first"}-${initializes}`,
                 inputSchema: { type: "object" },
+                ...(enabledMetadata === "output"
+                  ? {
+                      outputSchema: {
+                        type: "object",
+                        properties: { valid: { type: "boolean" } },
+                        required: ["valid"],
+                      },
+                    }
+                  : {}),
+                ...(enabledMetadata === "required"
+                  ? { execution: { taskSupport: "required" } }
+                  : {}),
               },
             ],
             ...(body.params?.cursor ? {} : { nextCursor: "next" }),
@@ -108,6 +162,20 @@ async function fixture() {
         reads++;
       }
       result = { content: [{ type: "text", text: "done" }] };
+      if (metadata === "output")
+        result = {
+          content: [{ type: "text", text: "done" }],
+          structuredContent: { valid: "invalid" },
+        };
+    }
+    if (legacySse) {
+      streams
+        .get(sid!)!
+        .write(
+          `event: message\ndata: ${JSON.stringify({ jsonrpc: "2.0", id: body.id, result })}\n\n`,
+        );
+      res.writeHead(202).end();
+      return;
     }
     res
       .writeHead(200, { "Content-Type": "application/json" })
@@ -146,6 +214,12 @@ async function fixture() {
     rejectLists() {
       rejectLists = true;
     },
+    omitListMethod() {
+      missingLists = true;
+    },
+    omitSecondListPage() {
+      missingListPage = true;
+    },
     loseInitialization() {
       loseInitialization = true;
     },
@@ -155,6 +229,15 @@ async function fixture() {
     loseSecondPage() {
       paginate = true;
       losePage = true;
+    },
+    paginateMetadata(kind: "output" | "required") {
+      paginate = true;
+      metadata = kind;
+    },
+    metadataAfterRecovery(kind: "output" | "required") {
+      paginate = true;
+      metadata = kind;
+      recoveredMetadataOnly = true;
     },
     holdWrite() {
       waitWrite = new Promise<void>((resolve) => {
@@ -167,7 +250,22 @@ async function fixture() {
     releaseWrite() {
       releaseWrite?.();
     },
-    close: () => new Promise<void>((resolve) => server.close(() => resolve())),
+    holdList() {
+      waitList = new Promise<void>((resolve) => {
+        releaseList = resolve;
+      });
+      return new Promise<void>((resolve) => {
+        startedList = resolve;
+      });
+    },
+    releaseList() {
+      releaseList?.();
+    },
+    close: () =>
+      new Promise<void>((resolve) => {
+        for (const stream of streams.values()) stream.end();
+        server.close(() => resolve());
+      }),
   };
 }
 function gateway(url: string, direct = false) {
@@ -223,6 +321,379 @@ test("only explicitly classified reads retry after a lost session", async () => 
     await mock.close();
   }
 });
+
+test("a legacy read retry refreshes required-task metadata before dispatching into the replacement session", async () => {
+  const mock = await fixture();
+  const mcp = gateway(mock.url);
+  try {
+    mock.metadataAfterRecovery("required");
+    await mcp.discover("mock");
+    mock.loseRead();
+    await assert.rejects(
+      mcp.call("mock", "lookup", {}, "read"),
+      McpNotSentError,
+    );
+    assert.equal(mock.initializes, 2);
+    assert.equal(mock.reads, 0);
+    assert.equal(
+      mock.requests.filter((request) => request.method === "tools/call").length,
+      1,
+    );
+  } finally {
+    await mcp.close();
+    await mock.close();
+  }
+});
+
+test("a legacy read retry validates output against the replacement session's schema", async () => {
+  const mock = await fixture();
+  const mcp = gateway(mock.url);
+  try {
+    mock.metadataAfterRecovery("output");
+    await mcp.discover("mock");
+    mock.loseRead();
+    await assert.rejects(
+      mcp.call("mock", "lookup", {}, "read"),
+      /schema de saída/,
+    );
+    assert.equal(mock.initializes, 2);
+    assert.equal(mock.reads, 1);
+    assert.equal(
+      mock.requests.filter((request) => request.method === "tools/call").length,
+      2,
+    );
+  } finally {
+    await mcp.close();
+    await mock.close();
+  }
+});
+
+test("legacy SSE discovery replaces an expired POST endpoint even without a session header", async () => {
+  const mock = await fixture(true);
+  const mcp = gateway(mock.url);
+  try {
+    assert.equal((await mcp.discover("mock")).length, 2);
+    mock.expire();
+    assert.equal((await mcp.discover("mock")).length, 2);
+    assert.equal(mock.initializes, 2);
+    assert.equal(mock.writes, 0);
+  } finally {
+    await mcp.close();
+    await mock.close();
+  }
+});
+
+for (const legacySse of [false, true]) {
+  test(`an idle ${legacySse ? "SSE" : "Streamable HTTP"} session recovers before a legacy action is sent`, async () => {
+    const mock = await fixture(legacySse);
+    const mcp = gateway(mock.url);
+    try {
+      await mcp.discover("mock");
+      await mcp.call("mock", "execute", {}, "action");
+      mock.expire();
+      await mcp.call("mock", "execute", {}, "action");
+      assert.equal(mock.initializes, 2);
+      assert.equal(mock.writes, 2);
+      assert.equal(
+        mock.requests.filter((request) => request.method === "tools/call")
+          .length,
+        2,
+      );
+    } finally {
+      await mcp.close();
+      await mock.close();
+    }
+  });
+}
+
+test("legacy tools/call compatibility only bypasses an explicit missing discovery method", async () => {
+  const mock = await fixture();
+  const mcp = gateway(mock.url);
+  try {
+    mock.omitListMethod();
+    await mcp.call("mock", "execute", {}, "action");
+    assert.equal(mock.writes, 1);
+    assert.equal(mock.initializes, 1);
+  } finally {
+    await mcp.close();
+    await mock.close();
+  }
+});
+
+test("legacy compatibility cannot bypass a missing discovery method on a later catalog page", async () => {
+  const mock = await fixture();
+  const mcp = gateway(mock.url);
+  try {
+    mock.paginateMetadata("required");
+    mock.omitSecondListPage();
+    await assert.rejects(
+      mcp.call("mock", "execute", {}, "action"),
+      McpNotSentError,
+    );
+    assert.equal(mock.initializes, 1);
+    assert.equal(mock.writes, 0);
+    assert.equal(
+      mock.requests.filter((request) => request.method === "tools/call").length,
+      0,
+    );
+  } finally {
+    await mcp.close();
+    await mock.close();
+  }
+});
+
+test("direct tools require a successful discovery probe before dispatch", async () => {
+  const mock = await fixture();
+  const mcp = gateway(mock.url, true);
+  try {
+    mock.omitListMethod();
+    await assert.rejects(
+      mcp.callDirect("mock", "execute", {}),
+      McpNotSentError,
+    );
+    assert.equal(mock.writes, 0);
+    assert.equal(mock.initializes, 1);
+  } finally {
+    await mcp.close();
+    await mock.close();
+  }
+});
+
+test("repeated session expiry during the probe is bounded and definitely unsent", async () => {
+  const mock = await fixture();
+  const mcp = gateway(mock.url, true);
+  try {
+    await mcp.discover("mock");
+    mock.rejectLists();
+    await assert.rejects(mcp.callDirect("mock", "execute", {}), (error) => {
+      assert.ok(error instanceof McpNotSentError);
+      assert.match(error.message, /expirou novamente antes do envio/);
+      return true;
+    });
+    assert.equal(mock.initializes, 2);
+    assert.equal(mock.writes, 0);
+  } finally {
+    await mcp.close();
+    await mock.close();
+  }
+});
+
+test("a removed endpoint after session admission fails before any tool is sent", async () => {
+  const mock = await fixture();
+  const mcp = gateway(mock.url, true);
+  try {
+    await mcp.discover("mock");
+    mock.failEndpoint();
+    await assert.rejects(mcp.callDirect("mock", "execute", {}), (error) => {
+      assert.ok(error instanceof McpNotSentError);
+      assert.match(error.message, /Endpoint MCP.*404.*Nenhuma chamada/);
+      return true;
+    });
+    assert.equal(mock.writes, 0);
+    assert.equal(
+      mock.requests.filter((request) => request.method === "initialize").length,
+      2,
+    );
+  } finally {
+    await mcp.close();
+    await mock.close();
+  }
+});
+
+test("concurrent direct calls and discovery share one recovered session without replaying effects", async () => {
+  const mock = await fixture();
+  const mcp = gateway(mock.url, true);
+  try {
+    await mcp.discover("mock");
+    mock.expire();
+    await Promise.all([
+      ...Array.from({ length: 6 }, () => mcp.callDirect("mock", "execute", {})),
+      mcp.discover("mock"),
+    ]);
+    assert.equal(mock.initializes, 2);
+    assert.equal(mock.writes, 6);
+    assert.equal(
+      mock.requests.filter((request) => request.method === "tools/call").length,
+      6,
+    );
+  } finally {
+    await mcp.close();
+    await mock.close();
+  }
+});
+
+test("cancelling a discovery probe leaves the tool definitely unsent", async () => {
+  const mock = await fixture();
+  const mcp = gateway(mock.url, true);
+  try {
+    await mcp.discover("mock");
+    const controller = new AbortController();
+    const started = mock.holdList();
+    const call = mcp.callDirect(
+      "mock",
+      "execute",
+      {},
+      { signal: controller.signal },
+    );
+    await started;
+    controller.abort();
+    await assert.rejects(call, McpNotSentError);
+    assert.equal(mock.writes, 0);
+    mock.releaseList();
+    await mcp.discover("mock");
+    assert.equal(mock.writes, 0);
+  } finally {
+    mock.releaseList();
+    await mcp.close();
+    await mock.close();
+  }
+});
+
+test("a dispatched SSE tool returning 404 is not replayed and the next operation reconnects", async () => {
+  const mock = await fixture(true);
+  const mcp = gateway(mock.url, true);
+  try {
+    await mcp.discover("mock");
+    mock.loseWrite();
+    await assert.rejects(
+      mcp.callDirect("mock", "execute", {}),
+      /não foi reenviada/,
+    );
+    assert.equal(mock.writes, 1);
+    await mcp.discover("mock");
+    assert.equal(mock.initializes, 2);
+    assert.equal(mock.writes, 1);
+  } finally {
+    await mcp.close();
+    await mock.close();
+  }
+});
+
+test("a tools/call response can take longer than the discovery timeout without being aborted or replayed", async (context) => {
+  const mock = await fixture();
+  const mcp = gateway(mock.url, true);
+  let call: Promise<unknown> | undefined;
+  try {
+    await mcp.discover("mock");
+    context.mock.timers.enable({ apis: ["setTimeout"] });
+    const started = mock.holdWrite();
+    call = mcp.callDirect("mock", "execute", {});
+    // Install a rejection handler before advancing the clock past 30 seconds.
+    void call.catch(() => {});
+    await started;
+    context.mock.timers.tick(30001);
+    mock.releaseWrite();
+    assert.match(JSON.stringify(await call), /done/);
+    assert.equal(mock.writes, 1);
+    assert.equal(
+      mock.requests.filter((request) => request.method === "tools/call").length,
+      1,
+    );
+  } finally {
+    context.mock.timers.reset();
+    mock.releaseWrite();
+    await call?.catch(() => {});
+    await mcp.close();
+    await mock.close();
+  }
+});
+
+test("a direct call checks an idle session before dispatch and recovers without creating an uncertain effect", async () => {
+  const mock = await fixture();
+  const mcp = gateway(mock.url, true);
+  const dir = await mkdtemp(join(tmpdir(), "mcp-idle-session-"));
+  const store = new Store(dir);
+  const calls = new McpCalls(store, mcp);
+  try {
+    await mcp.discover("mock");
+    await calls.execute("conversation", 1, "mock", "execute", {});
+    assert.equal(mock.writes, 1);
+    mock.expire();
+    await calls.execute("conversation", 2, "mock", "execute", {});
+    assert.equal(mock.initializes, 2);
+    assert.equal(mock.writes, 2);
+    assert.deepEqual(
+      calls.list("conversation").map((call) => call.state),
+      ["done", "done"],
+    );
+    const recovery = mock.requests
+      .slice(
+        mock.requests.findIndex((request) => request.method === "tools/call") +
+          1,
+      )
+      .filter((request) => !request.method.startsWith("notifications/"));
+    assert.deepEqual(recovery[0], {
+      method: "tools/list",
+      session: "session-1",
+    });
+    assert.equal(recovery[1].method, "initialize");
+    assert.equal(
+      mock.requests.filter((request) => request.method === "tools/call").length,
+      2,
+    );
+  } finally {
+    await calls.close();
+    await mcp.close();
+    store.close();
+    await mock.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+for (const recovery of ["automatic", "manual"] as const) {
+  for (const tool of ["lookup", "execute"]) {
+    test(`${recovery} session recovery preserves the output schema from the ${tool === "lookup" ? "first" : "second"} catalog page`, async () => {
+      const mock = await fixture();
+      const mcp = gateway(mock.url, true);
+      const dir = await mkdtemp(join(tmpdir(), "mcp-output-metadata-"));
+      const store = new Store(dir);
+      const calls = new McpCalls(store, mcp);
+      try {
+        mock.paginateMetadata("output");
+        await mcp.discover("mock");
+        mock.expire();
+        if (recovery === "manual") await mcp.discover("mock");
+        await assert.rejects(
+          calls.execute("conversation", 1, "mock", tool, {}),
+        );
+        assert.equal(mock.initializes, 2);
+        assert.equal(calls.list("conversation")[0].state, "uncertain");
+        assert.equal(
+          mock.requests.filter((request) => request.method === "tools/call")
+            .length,
+          1,
+        );
+      } finally {
+        await calls.close();
+        await mcp.close();
+        store.close();
+        await mock.close();
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+
+    test(`${recovery} session recovery preserves required task execution from the ${tool === "lookup" ? "first" : "second"} catalog page`, async () => {
+      const mock = await fixture();
+      const mcp = gateway(mock.url, true);
+      try {
+        mock.paginateMetadata("required");
+        await mcp.discover("mock");
+        mock.expire();
+        if (recovery === "manual") await mcp.discover("mock");
+        await assert.rejects(mcp.callDirect("mock", tool, {}), McpNotSentError);
+        assert.equal(mock.initializes, 2);
+        assert.equal(
+          mock.requests.filter((request) => request.method === "tools/call")
+            .length,
+          0,
+        );
+      } finally {
+        await mcp.close();
+        await mock.close();
+      }
+    });
+  }
+}
 
 test("initial endpoint 404 is distinct from session expiry and does not loop initialization", async () => {
   const mock = await fixture();

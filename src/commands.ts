@@ -97,8 +97,8 @@ export class Commands {
   allowed(access: CommandAccess) {
     return this.app.store.all<{ id: string; title: string }>(
       access.source === "web"
-        ? "SELECT id,title FROM conversations ORDER BY rowid DESC"
-        : "SELECT c.id,c.title FROM conversations c JOIN telegram_grants g ON g.conversationId=c.id WHERE g.chat=? AND g.user=? ORDER BY c.rowid DESC",
+        ? "SELECT id,title FROM conversations WHERE id NOT IN (SELECT conversationId FROM conversation_lifecycle WHERE deletedAt IS NOT NULL) ORDER BY rowid DESC"
+        : "SELECT c.id,c.title FROM conversations c JOIN telegram_grants g ON g.conversationId=c.id WHERE g.chat=? AND g.user=? AND c.id NOT IN (SELECT conversationId FROM conversation_lifecycle WHERE deletedAt IS NOT NULL) ORDER BY c.rowid DESC",
       ...(access.source === "web" ? [] : [access.chat, access.user]),
     );
   }
@@ -107,6 +107,10 @@ export class Commands {
       throw new CommandError(
         "Conversa não autorizada. Vincule-a pela web com /link CODIGO.",
       );
+    this.app.assertConversationAvailable(id);
+  }
+  busy(id: string) {
+    return [...this.inputs.values()].some((input) => input.id === id);
   }
   async active(access: CommandAccess) {
     const ids = new Set(this.allowed(access).map((item) => item.id));
@@ -194,7 +198,12 @@ export class Commands {
       this.authorize(result.conversationId, access);
       const pending = this.work.get(key);
       if (!pending && access.source === "telegram")
-        this.deliver(requestId, access.chat, result.text);
+        this.deliver(
+          requestId,
+          access.chat,
+          result.text,
+          result.conversationId,
+        );
       return pending ?? Promise.resolve(result);
     }
     const running = this.inputs.get(key);
@@ -260,6 +269,9 @@ export class Commands {
       if (parsed.name === "agents" && parsed.argument) {
         this.authorize(parsed.argument, access);
         await this.app.conversation(parsed.argument);
+        // The target can be archived while Durable resolves its conversation.
+        // Recheck before writing a receipt or admitting any selection effect.
+        this.authorize(parsed.argument, access);
       }
       this.app.store.run(
         "INSERT INTO command_receipts(key,conversationId,requestId,text,state) VALUES (?,?,?,?,'pending')",
@@ -287,13 +299,25 @@ export class Commands {
               const conversations = this.allowed(access);
               base.data = conversations;
               if (parsed.argument) {
-                if (access.source === "telegram")
-                  this.app.store.run(
-                    "UPDATE telegram SET conversationId=? WHERE chat=? AND user=?",
-                    parsed.argument,
-                    access.chat,
-                    access.user,
-                  );
+                if (access.source === "telegram") {
+                  this.app.store.db.exec("SAVEPOINT agent_selection");
+                  try {
+                    this.authorize(parsed.argument, access);
+                    this.app.store.run(
+                      "UPDATE telegram SET conversationId=? WHERE chat=? AND user=?",
+                      parsed.argument,
+                      access.chat,
+                      access.user,
+                    );
+                    this.app.store.db.exec("RELEASE SAVEPOINT agent_selection");
+                  } catch (error) {
+                    this.app.store.db.exec(
+                      "ROLLBACK TO SAVEPOINT agent_selection",
+                    );
+                    this.app.store.db.exec("RELEASE SAVEPOINT agent_selection");
+                    throw error;
+                  }
+                }
                 base.conversationId = parsed.argument;
                 base.text = `Conversa selecionada: ${parsed.argument} · ${conversations.find((entry) => entry.id === parsed.argument)!.title}`;
               } else
@@ -372,7 +396,12 @@ export class Commands {
             key,
           );
           if (access.source === "telegram")
-            this.deliver(requestId, access.chat, base.text);
+            this.deliver(
+              requestId,
+              access.chat,
+              base.text,
+              base.conversationId,
+            );
           this.app.store.db.exec("COMMIT");
         } catch (error) {
           this.app.store.db.exec("ROLLBACK");
@@ -390,7 +419,12 @@ export class Commands {
         );
         const result = this.result(this.row(key)!);
         if (access.source === "telegram")
-          this.deliver(requestId, access.chat, result.text);
+          this.deliver(
+            requestId,
+            access.chat,
+            result.text,
+            result.conversationId,
+          );
         return result;
       }
     };
@@ -415,8 +449,19 @@ export class Commands {
       .catch(() => {});
     return work;
   }
-  private deliver(requestId: string, chat: string, text: string) {
-    this.app.store.queueTelegram(`command:${requestId}`, chat, text, 4000);
+  private deliver(
+    requestId: string,
+    chat: string,
+    text: string,
+    conversationId: string,
+  ) {
+    this.app.store.queueTelegram(
+      `command:${requestId}`,
+      chat,
+      text,
+      4000,
+      conversationId,
+    );
   }
   async close() {
     await Promise.allSettled(this.work.values());

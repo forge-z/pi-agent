@@ -65,7 +65,9 @@ function composer() {
   );
   // Load the real application handlers, substituting only the browser environment.
   runInNewContext(
-    toolsSource.replace(/^export /gm, "") +
+    "const { attachToolVisibility, attachToolBody, createToolCalls, toolResultNeedsAttention } = (() => {" +
+      toolsSource.replace(/^export /gm, "") +
+      "\nreturn { attachToolVisibility, attachToolBody, createToolCalls, toolResultNeedsAttention }; })();" +
       "\n" +
       source.replace(/^import[\s\S]*?;\s*/gm, "") +
       '\nconversationId = "2";',
@@ -79,6 +81,7 @@ function composer() {
       navigator: {},
       configureUI: () => ({ reset() {} }),
       attachTelegramUI: () => ({ reset() {} }),
+      attachConversationManagementUI: () => ({ render() {} }),
       canDispatchCommandResult: () => true,
       createSlashAutocomplete: () => ({
         close() {},
