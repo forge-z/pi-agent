@@ -548,6 +548,42 @@ globalThis.PiEnglish = {
   "A conversa será movida para a lista de excluídas. As tarefas serão pausadas, e o Telegram precisará ser vinculado novamente antes de continuar usando o bot.":
     "The conversation will move to the deleted list. Its tasks will be paused, and Telegram must be linked again before you can continue using the bot.",
   "Excluir conversa": "Delete conversation",
+  "Excluir agora": "Delete now",
+  "Excluir definitivamente?": "Delete permanently?",
+  "Exclusão definitiva em {0}": "Permanent deletion on {0}",
+  "Exclusão definitiva prevista em {0}; o prazo de 7 dias começa ao confirmar.":
+    "Permanent deletion estimated for {0}; the 7-day period starts when you confirm.",
+  "Exclusão definitiva pendente": "Permanent deletion pending",
+  "Prazo de exclusão indisponível. Atualize a lista antes de continuar.":
+    "Deletion deadline unavailable. Refresh the list before continuing.",
+  "A conversa será mantida por 7 dias e depois excluída definitivamente. As tarefas serão pausadas, e o Telegram precisará ser vinculado novamente antes de continuar usando o bot.":
+    "The conversation will be kept for 7 days and then permanently deleted. Its tasks will be paused, and Telegram must be linked again before you can continue using the bot.",
+  "Você poderá restaurar a conversa durante 7 dias. Depois desse prazo, ela será excluída definitivamente. A restauração não reativa tarefas nem vincula o Telegram.":
+    "You can restore the conversation for 7 days. After that, it will be permanently deleted. Restoring does not reactivate tasks or link Telegram.",
+  "A conversa ‘{0}’ e seus dados serão excluídos definitivamente agora. Essa ação não pode ser desfeita.":
+    "The conversation ‘{0}’ and its data will be permanently deleted now. This action cannot be undone.",
+  "Esta conversa não poderá mais ser restaurada. O prazo previsto era {0}.":
+    "This conversation can no longer be restored after deletion. Its scheduled deadline was {0}.",
+  "Entendo que esta exclusão é definitiva e não poderá ser desfeita.":
+    "I understand this deletion is permanent and cannot be undone.",
+  "Não foi possível excluir definitivamente a conversa.":
+    "Could not permanently delete the conversation.",
+  "Metadados do histórico inconsistentes. A exclusão permanente foi bloqueada.":
+    "The history metadata is inconsistent. Permanent deletion was blocked.",
+  "Confirme explicitamente a exclusão permanente da conversa.":
+    "Explicitly confirm permanent deletion of the conversation.",
+  "Confirme a versão atual da conversa excluída.":
+    "Confirm the current version of the deleted conversation.",
+  "Exclusão permanente iniciada. A conversa não pode ser recuperada.":
+    "Permanent deletion has started. The conversation cannot be restored.",
+  "A conversa mudou. Atualize a lista antes de excluir permanentemente.":
+    "The conversation has changed. Refresh the list before deleting permanently.",
+  "A conversa raiz não pode ser excluída permanentemente.":
+    "The root conversation cannot be permanently deleted.",
+  "Versão do histórico incompatível com exclusão permanente.":
+    "The history version does not support permanent deletion.",
+  "Outra conversa depende deste histórico. A exclusão permanente foi bloqueada.":
+    "Another conversation depends on this history. Permanent deletion was blocked.",
   "Use um título de 1 a 100 caracteres, sem caracteres de controle.":
     "Use a title between 1 and 100 characters, with no control characters.",
   "Não foi possível renomear a conversa.": "Could not rename the conversation.",
@@ -874,6 +910,14 @@ globalThis.PiInterfaceErrors = [
   "Há execução pendente. Aguarde sua conclusão antes de excluir.",
   "Há operação pendente ou resultado externo sem resolução. Resolva antes de excluir.",
   "Há entrega em execução ou sem resolução. Verifique antes de excluir.",
+  "Confirme explicitamente a exclusão permanente da conversa.",
+  "Confirme a versão atual da conversa excluída.",
+  "Exclusão permanente iniciada. A conversa não pode ser recuperada.",
+  "A conversa mudou. Atualize a lista antes de excluir permanentemente.",
+  "A conversa raiz não pode ser excluída permanentemente.",
+  "Versão do histórico incompatível com exclusão permanente.",
+  "Outra conversa depende deste histórico. A exclusão permanente foi bloqueada.",
+  "Metadados do histórico inconsistentes. A exclusão permanente foi bloqueada.",
   "Tarefa não encontrada",
   "Telegram não está conectado e autorizado para esta conversa. Conecte o bot e vincule a conversa escolhida.",
   "Uma conexão anterior teve resultado incerto. Inicie uma nova conexão explícita para consultar o webhook antes de continuar.",

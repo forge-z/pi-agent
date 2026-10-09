@@ -47,6 +47,9 @@ export class Store {
     this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;
       CREATE TABLE IF NOT EXISTS conversations(id TEXT PRIMARY KEY, title TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS conversation_lifecycle(conversationId TEXT PRIMARY KEY,deletedAt INTEGER);
+      CREATE TABLE IF NOT EXISTS conversation_archive_versions(conversationId TEXT PRIMARY KEY,lastDeletedAt INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS conversation_retention(conversationId TEXT PRIMARY KEY,purgeAt INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS conversation_purges(conversationId TEXT PRIMARY KEY,deletedAt INTEGER NOT NULL,claimedAt INTEGER NOT NULL,completedAt INTEGER);
       CREATE TABLE IF NOT EXISTS conversation_titles(conversationId TEXT PRIMARY KEY);
       CREATE TABLE IF NOT EXISTS telegram_initial_revocations(conversationId TEXT PRIMARY KEY);
       CREATE TABLE IF NOT EXISTS delivery_conversations(deliveryId TEXT PRIMARY KEY,conversationId TEXT NOT NULL);
@@ -65,6 +68,9 @@ export class Store {
       CREATE TABLE IF NOT EXISTS credentials(provider TEXT PRIMARY KEY, value TEXT);
       CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
       CREATE TABLE IF NOT EXISTS sessions(token TEXT PRIMARY KEY, expires INTEGER);`);
+    this.db.exec(
+      "INSERT OR IGNORE INTO conversation_archive_versions SELECT conversationId,deletedAt FROM conversation_lifecycle WHERE deletedAt IS NOT NULL",
+    );
     // Migrate old mappings once. An explicitly removed grant must stay removed
     // after restart rather than being silently recreated from a stale mapping.
     if (!hadGrants)
@@ -199,7 +205,8 @@ export class Store {
   }
   conversationDeleted(id: string) {
     return !!this.get(
-      "SELECT 1 FROM conversation_lifecycle WHERE conversationId=? AND deletedAt IS NOT NULL",
+      "SELECT 1 FROM conversation_lifecycle WHERE conversationId=? AND deletedAt IS NOT NULL UNION ALL SELECT 1 FROM conversation_purges WHERE conversationId=?",
+      id,
       id,
     );
   }

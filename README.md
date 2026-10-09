@@ -23,6 +23,10 @@ Digite `/` no compositor para encontrar `/agents`, `/model`, `/thinking`, `/comp
 
 No Telegram, `/chats` lista conversas exclusivas, `/chats new TÍTULO` cria e seleciona uma conversa, e `/chats ID` troca o contexto. A próxima mensagem normal cria uma conversa Telegram automaticamente quando ainda não há seleção; o histórico antigo permanece na web. A seleção de chats não altera o vínculo usado pelos crons existentes.
 
+O menu lateral marca a conversa web vinculada ao Telegram com o ícone Telegram. Excluir uma conversa move seu histórico para a lixeira por sete dias, pausa suas tarefas e revoga o vínculo Telegram. A lista de excluídas mostra o prazo e permite restaurar ou **Excluir agora**, com confirmação da exclusão definitiva. Restaurar não reativa tarefas nem vínculos.
+
+Conversas que já estavam excluídas recebem sete dias a partir da primeira inicialização desta versão. A limpeza automática verifica prazos a cada minuto e retoma operações interrompidas após reiniciar. Execuções, entregas ou intervenções pendentes e dependências de outros históricos bloqueiam a limpeza até serem resolvidas; a conversa pode ser restaurada enquanto a exclusão definitiva não tiver começado. A limpeza remove os registros da conversa nos bancos locais, preservando outros chats e credenciais globais; não remove cópias de backup do volume.
+
 O Telegram registra esse catálogo e `/chats` no menu nativo `/` do chat privado autorizado depois da primeira mensagem. O diálogo mostra o estado do registro; menus de outros chats e menus alheios existentes são preservados. Novas respostas usam HTML seguro para negrito, itálico, links e código, com divisão de mensagens longas antes de entrar na fila persistente.
 
 Resultados de tarefas e crons também entram nessa fila quando a conversa mantém o vínculo privado ativo. A autorização é conferida antes de cada envio; revogação cancela partes pendentes e resultados incertos não são reenviados. Resultados de ocorrências concluídas sem vínculo não são enviados depois de uma conexão nova. Veja [entrega de tarefas](docs/cron-telegram-delivery.md).

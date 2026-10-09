@@ -4,7 +4,13 @@ import { test } from "node:test";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 
-type Conversation = { id: string; title: string; deletedAt?: number | null };
+type Conversation = {
+  id: string;
+  title: string;
+  deletedAt?: number | null;
+  purgeAt?: number | null;
+  telegramLinked?: boolean;
+};
 type Api = (path: string, method?: string, data?: unknown) => Promise<unknown>;
 type AttachConversationManagementUI = (
   api: Api,
@@ -27,6 +33,8 @@ type AttachConversationManagementUI = (
 type Handler = (event: { preventDefault(): void }) => unknown;
 
 class Element {
+  title = "";
+  tagName = "";
   id = "";
   value = "";
   textContent = "";
@@ -88,8 +96,16 @@ class FakeDocument {
     return this.elements.get(id) || null;
   }
 
-  createElement() {
-    return new Element();
+  createElement(tagName = "") {
+    const element = new Element();
+    element.tagName = tagName;
+    return element;
+  }
+
+  createElementNS(_namespace: string, tagName: string) {
+    const element = new Element();
+    element.tagName = tagName;
+    return element;
   }
 }
 
@@ -100,11 +116,19 @@ function fixture({
   ],
   deleted = [{ id: "deleted", title: "Conversa removida", deletedAt: 123 }],
   failDelete = false,
+  deletedReader,
   language = "pt-BR",
 }: {
-  conversations?: Array<{ id: string; title: string }>;
-  deleted?: Array<{ id: string; title: string; deletedAt: number }>;
+  conversations?: Array<Conversation>;
+  deleted?: Array<{
+    id: string;
+    title: string;
+    deletedAt: number;
+    purgeAt?: number | null;
+    telegramLinked?: boolean;
+  }>;
   failDelete?: boolean;
+  deletedReader?: () => Promise<Conversation[]>;
   language?: string;
 } = {}) {
   const document = new FakeDocument();
@@ -121,6 +145,9 @@ function fixture({
     "conversation-management-form",
     "conversation-management-rename-fields",
     "conversation-management-delete-fields",
+    "conversation-management-delete-notice",
+    "conversation-management-deadline",
+    "conversation-management-delete-acknowledgement",
     "conversation-management-name",
     "conversation-management-confirm-delete",
     "conversation-management-error",
@@ -151,7 +178,8 @@ function fixture({
   const operations: string[] = [];
   const api = async (path: string, method = "GET", data?: unknown) => {
     requests.push({ path, method, data });
-    if (path === "/api/conversations?deleted=1") return [...deleted];
+    if (path === "/api/conversations?deleted=1")
+      return deletedReader ? deletedReader() : [...deleted];
     if (method === "PUT")
       return {
         id: path.split("/").at(-1),
@@ -166,7 +194,11 @@ function fixture({
         deletedAt: 456,
       };
     }
-    if (method === "POST") return { id: "deleted", title: "Conversa removida" };
+    if (method === "POST") {
+      if (path.endsWith("/purge") && failDelete)
+        throw new Error("Há operações pendentes.");
+      return { id: "deleted", title: "Conversa removida" };
+    }
     return active;
   };
   const manager = attachConversationManagementUI(api, {
@@ -478,4 +510,227 @@ test("language changes relabel open conversation menus and dialogs without chang
     ).title,
     "Excluir conversa",
   );
+});
+
+test("linked web conversations show only the Telegram icon and keep translated accessible context", () => {
+  const f = fixture({
+    language: "en",
+    conversations: [
+      { id: "linked", title: "Web history", telegramLinked: true },
+      { id: "unlinked", title: "Telegram lookalike" },
+    ],
+  });
+  const rows = f.document.getElementById("conversations")!.children;
+  const linked = rows[0]!.children[0]!;
+  const unlinked = rows[1]!.children[0]!;
+  const icon = linked.children[0]!;
+
+  assert.equal(icon.tagName, "svg");
+  assert.equal(icon.attributes.get("class"), "icon conversation-telegram-icon");
+  assert.equal(icon.attributes.get("aria-hidden"), "true");
+  assert.equal(icon.attributes.get("title"), "Web conversation and Telegram");
+  assert.equal(
+    icon.children[0]!.attributes.get("href"),
+    "/icons.svg#telegram-logo",
+  );
+  assert.equal(
+    linked.attributes.get("aria-description"),
+    "Web conversation and Telegram",
+  );
+  assert.equal(linked.title, "Web history");
+  assert.equal(linked.children[1]!.textContent, "Web history");
+  f.i18n.setLanguage("pt-BR");
+  assert.equal(icon.attributes.get("title"), "Conversa web e Telegram");
+  assert.equal(
+    linked.attributes.get("aria-description"),
+    "Conversa web e Telegram",
+  );
+  assert.equal(unlinked.children.length, 1);
+  assert.equal(unlinked.children[0]!.textContent, "Telegram lookalike");
+});
+
+test("deleted conversation labels never render a Telegram marker", async () => {
+  const f = fixture({
+    deleted: [
+      {
+        id: "deleted-linked",
+        title: "Archived history",
+        deletedAt: 123,
+        telegramLinked: true,
+      },
+    ],
+  });
+  await f.document.getElementById("toggle-deleted-conversations")!.onclick?.();
+
+  const row = f.document.getElementById("conversations")!.children[0]!;
+  assert.equal(row.children[0]!.tagName, "span");
+  assert.equal(row.children[0]!.textContent, "Archived history");
+});
+
+test("archive warns about seven-day irreversible deletion before confirmation", async () => {
+  const f = fixture();
+  await buttonWithText(await openActions(f), "Excluir").onclick?.();
+  assert.match(
+    f.document.getElementById("conversation-management-intro")!.textContent,
+    /7 dias.*definitivamente/,
+  );
+  assert.match(
+    f.document.getElementById("conversation-management-delete-notice")!
+      .textContent,
+    /restaurar.*7 dias/,
+  );
+  assert.equal(
+    f.requests.some((request) => request.method === "DELETE"),
+    false,
+  );
+  const forecast = f.document.getElementById(
+    "conversation-management-deadline",
+  )!;
+  assert.match(forecast.textContent, /prevista em.*7 dias.*confirmar/);
+  f.i18n.setLanguage("en");
+  assert.match(forecast.textContent, /estimated for.*7-day.*confirm/);
+});
+
+test("deleted row shows localized deadline; immediate purge requires acknowledgement and captured archive version", async () => {
+  const purgeAt = Date.UTC(2026, 9, 16, 12);
+  const f = fixture({
+    deleted: [
+      { id: "deleted", title: "Meu histórico", deletedAt: 123, purgeAt },
+    ],
+  });
+  await f.document.getElementById("toggle-deleted-conversations")!.onclick?.();
+  const row = f.document.getElementById("conversations")!.children[0]!;
+  const deadline = row.children.find(
+    (child) => child.className === "conversation-purge-deadline",
+  )!;
+  assert.ok(deadline);
+  assert.match(deadline.textContent, /Exclusão definitiva em/);
+  const panel = await openActions(f, "deleted");
+  await buttonWithText(panel, "Excluir agora").onclick?.();
+  assert.equal(
+    f.document.getElementById("conversation-management-submit")!.disabled,
+    true,
+  );
+  assert.match(
+    f.document.getElementById("conversation-management-intro")!.textContent,
+    /Meu histórico.*definitivamente agora.*não pode ser desfeita/,
+  );
+  await f.document.getElementById("conversation-management-form")!.onsubmit!({
+    preventDefault() {},
+  });
+  assert.equal(
+    f.requests.some((request) => request.path.endsWith("/purge")),
+    false,
+  );
+  f.i18n.setLanguage("en");
+  assert.match(deadline.textContent, /Permanent deletion on/);
+  assert.match(
+    f.document.getElementById("conversation-management-intro")!.textContent,
+    /cannot be undone/,
+  );
+  assert.match(
+    f.document.getElementById("conversation-management-delete-acknowledgement")!
+      .textContent,
+    /permanent/,
+  );
+  const confirm = f.document.getElementById(
+    "conversation-management-confirm-delete",
+  )!;
+  confirm.checked = true;
+  await confirm.emit("change");
+  await f.document.getElementById("conversation-management-form")!.onsubmit!({
+    preventDefault() {},
+  });
+  const request = f.requests.find((request) => request.path.endsWith("/purge"));
+  assert.equal(
+    JSON.stringify(request),
+    JSON.stringify({
+      path: "/api/conversations/deleted/purge",
+      method: "POST",
+      data: { confirm: true, expectedDeletedAt: 123 },
+    }),
+  );
+  assert.equal(f.operations.includes("select"), false);
+  assert.equal(
+    f.operations.some((operation) => operation.startsWith("deleted:")),
+    false,
+  );
+  assert.equal(
+    f.document.getElementById("conversation-management-dialog")!.open,
+    false,
+  );
+});
+
+test("failed permanent deletion preserves dialog, confirmation and retained row", async () => {
+  const f = fixture({
+    deleted: [
+      {
+        id: "deleted",
+        title: "Retido",
+        deletedAt: 123,
+        purgeAt: Date.UTC(2026, 9, 16),
+      },
+    ],
+    failDelete: true,
+  });
+  await f.document.getElementById("toggle-deleted-conversations")!.onclick?.();
+  await buttonWithText(
+    await openActions(f, "deleted"),
+    "Excluir agora",
+  ).onclick?.();
+  const confirm = f.document.getElementById(
+    "conversation-management-confirm-delete",
+  )!;
+  confirm.checked = true;
+  await confirm.emit("change");
+  await f.document.getElementById("conversation-management-form")!.onsubmit!({
+    preventDefault() {},
+  });
+  assert.equal(
+    f.document.getElementById("conversation-management-dialog")!.open,
+    true,
+  );
+  assert.equal(confirm.checked, true);
+  assert.equal(f.manager.getDeletedConversations().length, 1);
+  assert.match(
+    f.document.getElementById("conversation-management-error")!.textContent,
+    /pendentes/,
+  );
+});
+
+test("a delayed trash refresh cannot repopulate a permanently purged row", async () => {
+  const rows = [
+    { id: "a", title: "A", deletedAt: 1, purgeAt: 1000 },
+    { id: "b", title: "B", deletedAt: 2, purgeAt: 1000 },
+  ];
+  let call = 0;
+  const reads: Array<(rows: Conversation[]) => void> = [];
+  const f = fixture({
+    deletedReader: () =>
+      ++call === 1
+        ? Promise.resolve(rows)
+        : new Promise((resolve) => reads.push(resolve)),
+  });
+  await f.document.getElementById("toggle-deleted-conversations")!.onclick?.();
+  async function purge(id: string) {
+    await buttonWithText(await openActions(f, id), "Excluir agora").onclick?.();
+    f.document.getElementById(
+      "conversation-management-confirm-delete",
+    )!.checked = true;
+    return f.document.getElementById("conversation-management-form")!.onsubmit!(
+      { preventDefault() {} },
+    );
+  }
+  const first = purge("a");
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(reads.length, 1);
+  const second = purge("b");
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(reads.length, 2);
+  reads[1]([]);
+  await second;
+  reads[0]([rows[1]]);
+  await first;
+  assert.equal(f.manager.getDeletedConversations().length, 0);
+  assert.equal(f.document.getElementById("conversations")!.children.length, 0);
 });
