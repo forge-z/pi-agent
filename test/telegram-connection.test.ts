@@ -357,6 +357,89 @@ test("polling preserves busy updates and offset, then retries exactly once after
   }
 });
 
+test("a binding that becomes busy during admission awaits does not terminally reject the selected Telegram input", async () => {
+  const f = await fixture();
+  let release: (() => void) | undefined;
+  let settings: Promise<void> | undefined;
+  try {
+    const anchor = await f.app.create("Web anchor");
+    await f.connect(anchor);
+    f.fake.push(dm(9500, "/new Selecionada"));
+    await until(() => f.offset() === "9501");
+    const selected = f.app.store.get<{ conversationId: string }>(
+      "SELECT conversationId FROM telegram_chat_selection WHERE chat='42' AND user='42'",
+    )!.conversationId;
+    const drain = Reflect.get(f.app, "drainDeferredOutcomes");
+    Reflect.set(f.app, "drainDeferredOutcomes", async () => {
+      Reflect.set(f.app, "drainDeferredOutcomes", drain);
+      let entered!: () => void;
+      const ready = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      settings = f.app.withConversationSettings(anchor, async () => {
+        entered();
+        await gate;
+      });
+      await ready;
+    });
+    let busyObserved = false;
+    const available = f.app.assertConversationAvailable.bind(f.app);
+    f.app.assertConversationAvailable = (id) => {
+      try {
+        available(id);
+      } catch (error) {
+        if (id === anchor) busyObserved = true;
+        throw error;
+      }
+    };
+    f.fake.push(dm(9501, "Preservar na corrida de admissão"));
+    await until(() => busyObserved);
+    assert.equal(f.offset(), "9501");
+    assert.equal(
+      f.app.store.get("SELECT 1 FROM telegram_poll_receipts WHERE id=9501"),
+      undefined,
+    );
+    assert.equal(
+      f.app.store.get("SELECT 1 FROM requests WHERE requestId='telegram:9501'"),
+      undefined,
+    );
+    assert.ok(release);
+    release();
+    release = undefined;
+    await settings;
+    settings = undefined;
+    await until(() => f.offset() === "9502");
+    assert.equal(
+      f.app.store.all(
+        "SELECT * FROM telegram_poll_receipts WHERE id=9501 AND state='accepted'",
+      ).length,
+      1,
+    );
+    assert.equal(
+      f.app.store.all(
+        "SELECT * FROM requests WHERE requestId='telegram:9501' AND conversationId=?",
+        selected,
+      ).length,
+      1,
+    );
+    await (await f.app.conversation(selected)).waitForIdle(context);
+    await f.restart();
+    assert.equal(f.offset(), "9502");
+    assert.equal(
+      f.app.store.all("SELECT * FROM requests WHERE requestId='telegram:9501'")
+        .length,
+      1,
+    );
+  } finally {
+    release?.();
+    await settings;
+    await f.close();
+  }
+});
+
 test("configured Telegram owner receives new/relink guidance after deleting every conversation and can explicitly link a fresh web anchor", async () => {
   const f = await fixture();
   try {

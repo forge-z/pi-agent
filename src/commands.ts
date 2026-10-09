@@ -127,6 +127,14 @@ export class Commands {
   authorize(id: string, access: CommandAccess) {
     if (access.source === "web" && this.app.telegramChats.dedicated(id))
       throw new CommandError("Conversa exclusiva do Telegram.");
+    if (
+      access.source === "telegram" &&
+      this.app.telegramChats.dedicated(id) &&
+      this.app.telegramChats.owns(id, access)
+    )
+      // A listing may omit temporarily unavailable rows. An admission must
+      // preserve the actual error so polling can retry rather than reject it.
+      this.app.telegramChats.binding(access);
     if (!this.allowed(access).some((item) => item.id === id))
       throw new CommandError(
         "Conversa não autorizada. Vincule-a pela web com /link CODIGO.",
