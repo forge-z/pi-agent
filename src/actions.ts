@@ -6,6 +6,7 @@ export class Actions {
   constructor(
     private store: Store,
     private gateway: ToolGateway,
+    private admission: (conversationId: string) => void = () => {},
   ) {}
   async read(
     conversationId: string,
@@ -14,6 +15,7 @@ export class Actions {
     args: Record<string, unknown>,
     scope = "manual",
   ) {
+    this.admission(conversationId);
     const result = await this.gateway.call(server, tool, args, "read");
     if (
       typeof result === "object" &&
@@ -37,6 +39,7 @@ export class Actions {
     args: Record<string, unknown>,
     scope = "manual",
   ) {
+    this.admission(conversationId);
     const id = createHash("sha256")
       .update(`${conversationId}:${taskId}`)
       .digest("hex")
@@ -85,6 +88,7 @@ export class Actions {
     decision: "approve" | "deny",
     signal?: AbortSignal,
   ) {
+    this.admission(conversationId);
     const action = this.store.get<Action>(
       "SELECT * FROM actions WHERE id=? AND conversationId=?",
       id,
@@ -145,6 +149,7 @@ export class Actions {
     return this.store.get<Action>("SELECT * FROM actions WHERE id=?", id)!;
   }
   reconcile(conversationId: string, id: string, note: string) {
+    this.admission(conversationId);
     if (!note.trim())
       throw new Error("Informe o resultado verificado no serviço externo");
     this.store.run(

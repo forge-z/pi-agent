@@ -407,15 +407,13 @@ export function createAppServer(app: Runtime, options: ServerOptions) {
           );
         if (reconcileMcp && method === "POST") {
           await app.conversation(reconcileMcp[1]);
-          return json(
-            response,
-            200,
-            app.mcpCalls.reconcile(
-              reconcileMcp[1],
-              reconcileMcp[2],
-              text((await body(request)).note),
-            ),
+          const call = app.mcpCalls.reconcile(
+            reconcileMcp[1],
+            reconcileMcp[2],
+            text((await body(request)).note),
           );
+          if (call) await app.recordMcpOutcome(call);
+          return json(response, 200, call);
         }
         if (path === "/api/commands" && method === "GET")
           return json(response, 200, { commands: commandCatalog });

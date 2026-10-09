@@ -128,6 +128,22 @@ export class CuaHandoffs {
     }
     return false;
   }
+  private ownerEffects(conversationId: string) {
+    return !!(
+      this.store.get(
+        "SELECT 1 FROM actions WHERE conversationId=? AND state IN ('pending','running','uncertain')",
+        conversationId,
+      ) ||
+      this.store.get(
+        "SELECT 1 FROM mcp_calls WHERE conversationId=? AND state IN ('running','paused','uncertain')",
+        conversationId,
+      ) ||
+      this.store.get(
+        "SELECT 1 FROM mcp_interactions WHERE conversationId=? AND state='pending'",
+        conversationId,
+      )
+    );
+  }
   request(conversationId: string, taskId: number, server: string) {
     if (this.closed)
       throw new CuaHandoffError(
@@ -156,7 +172,8 @@ export class CuaHandoffs {
       throw new CuaHandoffError(
         "Já existe uma intervenção CUA pendente para esta conversa ou origem.",
       );
-    if (this.originBusy(credential.origin)) throw busy();
+    if (this.originBusy(credential.origin) || this.ownerEffects(conversationId))
+      throw busy();
     const id = randomUUID();
     this.store.run(
       "INSERT INTO cua_handoffs(id,conversationId,server,origin,binding,requestKey,state,createdAt) VALUES (?,?,?,?,?,?,'pending',?)",
@@ -218,7 +235,8 @@ export class CuaHandoffs {
         "Conexão CUA mudou; a intervenção permanece incerta e pausada.",
       );
     }
-    if (this.originBusy(row.origin)) throw busy();
+    if (this.originBusy(row.origin) || this.ownerEffects(conversationId))
+      throw busy();
     // Claim before the first await: duplicate clicks and prompt admission cannot race minting.
     if (
       !this.store.run(
@@ -238,7 +256,11 @@ export class CuaHandoffs {
         );
         throw busy();
       }
-      if (this.closed || this.originBusy(row.origin)) {
+      if (
+        this.closed ||
+        this.originBusy(row.origin) ||
+        this.ownerEffects(conversationId)
+      ) {
         this.store.run(
           "UPDATE cua_handoffs SET state='pending' WHERE id=? AND state='creating'",
           id,
