@@ -1,3 +1,4 @@
+import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import {
   createServer,
   type IncomingMessage,
@@ -8,7 +9,7 @@ import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ConversationError, type Runtime } from "./runtime.js";
-import { hash, SqlCredentials } from "./store.js";
+import { hash } from "./store.js";
 import { ProviderLogin } from "./provider-login.js";
 import type { Telegram, TelegramUpdate } from "./telegram.js";
 import { TaskError } from "./tasks.js";
@@ -76,7 +77,17 @@ export function createAppServer(app: Runtime, options: ServerOptions) {
     .catch(() =>
       console.error("Não foi possível restaurar a conexão Telegram"),
     );
-  const login = new ProviderLogin(app.models, app.store);
+  const login = new ProviderLogin(app.models, app.store, async () => {
+    const active = await app.harness.inspect(context);
+    if (
+      active.tasks.length ||
+      app.store.providerAdmissions ||
+      app.store.get("SELECT 1 FROM requests WHERE status='pending'")
+    )
+      throw new SettingsError(
+        "Aguarde as conversas e tarefas concluírem antes de alterar credenciais",
+      );
+  });
   const tasks = app.tasks;
   tasks.start();
   const streams = new Set<ServerResponse>();
@@ -195,12 +206,15 @@ export function createAppServer(app: Runtime, options: ServerOptions) {
         if (path === "/api/status" && method === "GET")
           return json(response, 200, {
             mode: app.options.mode ?? "demo",
-            provider: app.options.mode === "live" ? "openai" : "faux",
+            provider: app.settings.provider,
             model: app.settings.defaults().modelId,
             effort: app.settings.defaults().effort,
             credentials:
-              (await new SqlCredentials(app.store).read("openai"))?.type ??
-              null,
+              app.settings
+                .providers()
+                .find((provider) => provider.id === app.settings.provider)
+                ?.credentialType ?? null,
+            providers: app.settings.providers(),
           });
         if (path === "/api/settings") {
           if (method === "GET")
@@ -284,7 +298,38 @@ export function createAppServer(app: Runtime, options: ServerOptions) {
               409,
               "Ative APP_MODE=live para conectar o provider",
             );
-          return json(response, 202, { id: login.start(owner) });
+          const input = request.headers["content-type"]?.startsWith(
+            "application/json",
+          )
+            ? await body(request)
+            : {};
+          const provider =
+            input.provider === undefined ? "openai" : text(input.provider);
+          if (input.type !== undefined && input.type !== "oauth")
+            throw new SettingsError(
+              "Use o formulário de chave de API para este método",
+            );
+          return json(response, 202, {
+            id: login.start(owner, provider, "oauth", input.replace === true),
+          });
+        }
+        const apiKeyRoute = /^\/api\/provider\/([\w-]+)\/api-key$/.exec(path);
+        if (apiKeyRoute && method === "PUT") {
+          if (app.options.mode !== "live")
+            throw new HttpError(
+              409,
+              "Ative APP_MODE=live para conectar o provider",
+            );
+          const input = await body(request);
+          return json(
+            response,
+            200,
+            await login.saveApiKey(
+              apiKeyRoute[1],
+              input.apiKey,
+              input.replace === true,
+            ),
+          );
         }
         const flow = /^\/api\/provider\/login\/([\w-]+)$/.exec(path);
         if (flow) {

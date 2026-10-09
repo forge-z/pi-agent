@@ -671,9 +671,70 @@ globalThis.PiEnglish = {
   "Consultar agendamentos": "View schedules",
   "Interromper a execução e a fila atuais": "Stop the current run and queue",
   "Consultar os comandos disponíveis": "View available commands",
+  "Gerencie conexões, modelos e aparência do seu espaço.":
+    "Manage connections, models and the appearance of your space.",
+  Conexões: "Connections",
+  "Escolha como acessar os modelos de cada provedor.":
+    "Choose how to access each provider’s models.",
+  "Conexões dos provedores": "Provider connections",
+  Autenticação: "Authentication",
+  "Conta ChatGPT": "ChatGPT account",
+  "Chave API OpenAI": "OpenAI API key",
+  "Chave API Anthropic": "Anthropic API key",
+  "O uso da API é cobrado pelo provedor. A chave salva fica no servidor e não é exibida aqui.":
+    "API usage is billed by the provider. Your saved key stays on the server and is not shown here.",
+  "Use uma chave API do Anthropic Console. O uso da API é cobrado pelo provedor; a chave salva não é exibida aqui.":
+    "Use an API key from Anthropic Console. API usage is billed by the provider; your saved key is not shown here.",
+  "Salvar chave API": "Save API key",
+  "Confirmo substituir a credencial OpenAI atual.":
+    "I confirm replacing the current OpenAI credential.",
+  "Confirmo substituir a credencial Anthropic atual.":
+    "I confirm replacing the current Anthropic credential.",
+  Provedor: "Provider",
+  "Escolha o provedor, o modelo e o esforço para novas conversas.":
+    "Choose the provider, model and reasoning effort for new conversations.",
+  "Aparência e idioma": "Appearance and language",
+  "Ajustes deste navegador para deixar o espaço do seu jeito.":
+    "Browser preferences to make this space your own.",
+  "Conexão indisponível neste ambiente.":
+    "Connection unavailable in this environment.",
+  "Chave API configurada": "API key configured",
+  "Conta ChatGPT conectada": "ChatGPT account connected",
+  "Conectar novamente com ChatGPT": "Reconnect with ChatGPT",
+  "Informe uma chave API.": "Enter an API key.",
+  "Chave API salva no servidor.": "API key saved on the server.",
+  "Não foi possível salvar a conexão. Tente novamente.":
+    "Could not save the connection. Please try again.",
+  "Não foi possível iniciar a conexão. Tente novamente.":
+    "Could not start the connection. Please try again.",
+  "Confirmo substituir minha conexão ChatGPT por esta chave API OpenAI.":
+    "I confirm replacing my ChatGPT connection with this OpenAI API key.",
+  "Confirmo substituir a conexão ChatGPT atual.":
+    "I confirm replacing the current ChatGPT connection.",
+  "Confirmo substituir a chave API OpenAI atual por uma conexão ChatGPT.":
+    "I confirm replacing the current OpenAI API key with a ChatGPT connection.",
+  "Confirmo substituir a chave API OpenAI atual.":
+    "I confirm replacing the current OpenAI API key.",
+  "Confirmo substituir a chave API Anthropic atual.":
+    "I confirm replacing the current Anthropic API key.",
+  "Escolha provider, modelo e esforço":
+    "Choose a provider, model and reasoning effort",
+  "Aguarde a conversa concluir antes de mudar provider, modelo e esforço":
+    "Wait for the conversation to finish before changing its provider, model or reasoning effort",
+  "Conecte o provider desta conversa antes de enviar mensagens ou executar tarefas":
+    "Connect this conversation’s provider before sending messages or running tasks",
+  "Conecte o provider desta conversa antes de compactar o contexto":
+    "Connect this conversation’s provider before compacting its context",
+  "Aguarde a conexão do provider concluir antes de executar a conversa":
+    "Wait for the provider connection to finish before running the conversation",
+  "Chave API DeepSeek": "DeepSeek API key",
+  "Use uma chave API da plataforma DeepSeek. O uso da API é cobrado pelo provedor; a chave salva não é exibida aqui.":
+    "Use an API key from the DeepSeek platform. API usage is billed by the provider; your saved key is not shown here.",
+  "Confirmo substituir a chave API DeepSeek atual.":
+    "I confirm replacing the current DeepSeek API key.",
+  "Confirmo substituir a credencial DeepSeek atual.":
+    "I confirm replacing the current DeepSeek credential.",
 };
-
-// Only known interface diagnostics are translated in error channels.
 globalThis.PiInterfaceErrors = [
   "Decisão MCP inválida",
   "Tempo de resposta MCP excedido. O resultado da chamada pode ser incerto.",
@@ -731,4 +792,9 @@ globalThis.PiInterfaceErrors = [
   "Endpoint MCP incompatível ou não encontrado (HTTP 404). Confira o endpoint MCP completo.",
   "Endpoint MCP incompatível ou não encontrado (HTTP 405). Confira o endpoint MCP completo.",
   "Resultado MCP incerto. Verifique o serviço antes de tentar outra execução.",
+  "Escolha provider, modelo e esforço",
+  "Aguarde a conversa concluir antes de mudar provider, modelo e esforço",
+  "Conecte o provider desta conversa antes de enviar mensagens ou executar tarefas",
+  "Conecte o provider desta conversa antes de compactar o contexto",
+  "Aguarde a conexão do provider concluir antes de executar a conversa",
 ];

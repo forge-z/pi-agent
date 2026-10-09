@@ -107,6 +107,7 @@ test("model and effort commands use Pi capabilities; concurrent duplicates and o
     ]);
     assert.deepEqual(results[0], results[1]);
     assert.deepEqual(await f.app.settings.conversation(id), {
+      provider: "faux",
       modelId: "two",
       effort: "off",
     });
@@ -119,6 +120,7 @@ test("model and effort commands use Pi capabilities; concurrent duplicates and o
     await f.restart();
     await f.app.admit(id, "model", "/model two", web);
     assert.deepEqual(await f.app.settings.conversation(id), {
+      provider: "faux",
       modelId: "one",
       effort: "low",
     });

@@ -36,6 +36,8 @@ export interface Delivery {
 }
 export class Store {
   readonly db: DatabaseSync;
+  credentialMutation = false;
+  providerAdmissions = 0;
   constructor(dir: string) {
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     this.db = new DatabaseSync(`${dir}/app.sqlite`);
@@ -263,8 +265,16 @@ export const hash = (value: string) =>
 
 /** Pi owns OAuth/login/refresh. Its adapter excludes the private Telegram credential. */
 export class SqlCredentials implements CredentialStore {
-  private tails = new Map<string, Promise<unknown>>();
-  constructor(private store: Store) {}
+  private static queues = new WeakMap<Store, Map<string, Promise<unknown>>>();
+  private tails: Map<string, Promise<unknown>>;
+  constructor(private store: Store) {
+    let tails = SqlCredentials.queues.get(store);
+    if (!tails) {
+      tails = new Map();
+      SqlCredentials.queues.set(store, tails);
+    }
+    this.tails = tails;
+  }
   async read(providerId: string, options?: AuthOperationOptions) {
     options?.signal?.throwIfAborted();
     const row = this.store.get<{ value: string }>(

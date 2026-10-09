@@ -238,33 +238,41 @@ export class Commands {
         text: "",
       };
       const current =
-        parsed.name === "model" || parsed.name === "thinking"
+        parsed.name === "model" ||
+        parsed.name === "thinking" ||
+        parsed.name === "compact"
           ? await this.app.settings.conversation(id)
           : undefined;
-      let setting: { modelId: string; effort: string } | undefined;
+      let setting:
+        { provider: string; modelId: string; effort: string } | undefined;
       if (parsed.name === "model" && parsed.argument) {
         const model = this.app.models.getModel(
-          this.app.settings.provider,
+          current!.provider,
           parsed.argument,
         );
         if (!model)
           throw new SettingsError("Modelo não disponível no catálogo do Pi");
         setting = {
+          provider: current!.provider,
           modelId: model.id,
           effort: clampThinkingLevel(model, current!.effort),
         };
       }
       if (parsed.name === "thinking" && parsed.argument)
-        setting = { modelId: current!.modelId, effort: parsed.argument };
+        setting = {
+          provider: current!.provider,
+          modelId: current!.modelId,
+          effort: parsed.argument,
+        };
       if (setting) this.app.settings.validate(setting);
       if (
         parsed.name === "compact" &&
         this.app.options.mode === "live" &&
         !this.app.options.models &&
-        !(await this.app.models.checkAuth(this.app.settings.provider))
+        !(await this.app.models.checkAuth(current!.provider))
       )
         throw new SettingsError(
-          "Conecte sua conta ChatGPT antes de compactar o contexto",
+          "Conecte o provider desta conversa antes de compactar o contexto",
         );
       if (parsed.name === "agents" && parsed.argument) {
         this.authorize(parsed.argument, access);
@@ -330,7 +338,7 @@ export class Commands {
             }
             case "model":
             case "thinking": {
-              const models = this.app.settings.catalog();
+              const models = this.app.settings.catalog(current!.provider);
               base.data = { current, models };
               base.text =
                 parsed.name === "model"
@@ -437,7 +445,11 @@ export class Commands {
       serial
         ? (this.tails.get(id) ?? Promise.resolve()).catch(() => {})
         : Promise.resolve()
-    ).then(operation);
+    ).then(() =>
+      parsed.name === "compact"
+        ? this.app.withProviderAdmission(operation)
+        : operation(),
+    );
     if (serial) this.tails.set(id, work);
     this.work.set(key, work);
     void work
