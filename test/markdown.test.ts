@@ -188,3 +188,32 @@ test("dense Markdown below the byte limit cannot build an unbounded token DOM", 
   assert.equal(find(fragment, "pre")?.textContent, source);
   assert.ok(tags(fragment).length < 5);
 });
+
+test("unbalanced emphasis below the text limit cannot block input before token limits run", () => {
+  const source = "**a ".repeat(8190);
+  // This exact sub-32KB input takes over ten seconds in the installed lexer.
+  // The VM deadline interrupts synchronous parsing and makes the regression
+  // fail promptly; the renderer must preserve the entire input as inert text.
+  const fragment = runInNewContext(
+    `${rendererSource}\nrenderMarkdown(source, testDocument)`,
+    { lexer, URL, source, testDocument },
+    { timeout: 1000 },
+  ) as TestNode;
+  assert.equal(find(fragment, "pre")?.textContent, source);
+  assert.ok(tags(fragment).length < 5);
+});
+
+test("dense list markers also bypass parsing before nested list work blocks input", () => {
+  for (const source of [
+    "- ".repeat(16375) + "x",
+    "+ ".repeat(16000) + "x",
+    "1. ".repeat(10000) + "x",
+  ]) {
+    const fragment = runInNewContext(
+      `${rendererSource}\nrenderMarkdown(source, testDocument)`,
+      { lexer, URL, source, testDocument },
+      { timeout: 250 },
+    ) as TestNode;
+    assert.equal(find(fragment, "pre")?.textContent, source);
+  }
+});
