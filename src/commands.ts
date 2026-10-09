@@ -105,17 +105,16 @@ export class Commands {
   allowed(access: CommandAccess) {
     const rows = this.app.store.all<{ id: string; title: string }>(
       access.source === "web"
-        ? "SELECT id,title FROM conversations WHERE id NOT IN (SELECT conversationId FROM telegram_conversations) AND id NOT IN (SELECT conversationId FROM conversation_lifecycle WHERE deletedAt IS NOT NULL) ORDER BY rowid DESC"
+        ? "SELECT id,title FROM conversations WHERE id NOT IN (SELECT conversationId FROM conversation_lifecycle WHERE deletedAt IS NOT NULL) ORDER BY rowid DESC"
         : "SELECT c.id,c.title FROM conversations c JOIN telegram_grants g ON g.conversationId=c.id WHERE g.chat=? AND g.user=? AND c.id NOT IN (SELECT conversationId FROM conversation_lifecycle WHERE deletedAt IS NOT NULL) ORDER BY c.rowid DESC",
       ...(access.source === "web" ? [] : [access.chat, access.user]),
     );
     return rows.filter((row) => {
+      // Authenticated web access can continue any active conversation. Origin
+      // metadata scopes Telegram authorization, not the web operator's access.
+      if (access.source === "web") return true;
       if (!this.app.telegramChats.dedicated(row.id)) return true;
-      if (
-        access.source !== "telegram" ||
-        !this.app.telegramChats.owns(row.id, access)
-      )
-        return false;
+      if (!this.app.telegramChats.owns(row.id, access)) return false;
       try {
         this.app.telegramChats.binding(access);
         return true;
@@ -125,8 +124,6 @@ export class Commands {
     });
   }
   authorize(id: string, access: CommandAccess) {
-    if (access.source === "web" && this.app.telegramChats.dedicated(id))
-      throw new CommandError("Conversa exclusiva do Telegram.");
     if (
       access.source === "telegram" &&
       this.app.telegramChats.dedicated(id) &&
