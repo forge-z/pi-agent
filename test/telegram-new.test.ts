@@ -371,10 +371,7 @@ test("relinking a new web chat with history preserves its web origin and creates
       "telegram",
     );
     f.app.commands.authorize(web, { source: "web" });
-    assert.throws(
-      () => f.app.commands.authorize(telegram, { source: "web" }),
-      /exclusiva do Telegram/,
-    );
+    f.app.commands.authorize(telegram, { source: "web" });
     assert.equal(
       f.app.store.all(
         "SELECT * FROM requests WHERE conversationId=? AND source='web'",

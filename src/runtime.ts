@@ -1214,10 +1214,6 @@ export class Runtime {
     access: CommandAccess,
   ) {
     this.assertHandoffAvailable(conversationId);
-    if (access.source === "web" && this.telegramChats.dedicated(conversationId))
-      throw new CommandError(
-        "Conversa exclusiva do Telegram. Use a interface web para suas conversas web.",
-      );
     if (
       access.source === "web" &&
       /^\/(link|start)(?:@[a-zA-Z0-9_]+)?(?:\s|$)/.test(text.trim())
@@ -1284,8 +1280,6 @@ export class Runtime {
   ) {
     if (this.closing) throw new Error("Serviço encerrando");
     this.assertHandoffAvailable(conversationId);
-    if (source === "web" && this.telegramChats.dedicated(conversationId))
-      throw new CommandError("Conversa exclusiva do Telegram.");
     if (
       !/^[\w:.-]{1,160}$/.test(requestId) ||
       !text.trim() ||

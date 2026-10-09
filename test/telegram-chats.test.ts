@@ -213,9 +213,13 @@ test("the next Telegram message automatically gets separate context without movi
     assert.deepEqual(texts, ["somente Telegram", "segunda mensagem"]);
     assert.equal(taskTelegramAvailable(f.app.store, f.webId), true);
     assert.equal(taskTelegramAvailable(f.app.store, id), true);
-    await assert.rejects(
-      f.app.admit(id, "web-leak", "web input", { source: "web" }),
-      /Telegram/,
+    assert.equal(
+      idOf(
+        await f.app.admit(id, "web-continuation", "web input", {
+          source: "web",
+        }),
+      ),
+      id,
     );
   } finally {
     await f.close();
@@ -288,7 +292,7 @@ test("/chats creates, lists and switches scoped chats; retries and restart never
     );
     assert.equal(
       f.app.commands.allowed({ source: "web" }).some((c) => c.id === firstId),
-      false,
+      true,
     );
   } finally {
     await f.close();
