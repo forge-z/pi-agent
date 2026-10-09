@@ -25,6 +25,7 @@ export interface McpConfig {
   deniedTools?: string[];
   tokenFile?: string;
   token?: string;
+  cuaViewer?: boolean;
 }
 export class PolicyError extends Error {}
 export class McpError extends Error {}
@@ -195,6 +196,7 @@ export class McpGateway implements ToolGateway {
   private operations = 0;
   private tails = new Map<string, Promise<unknown>>();
   private active = new Map<string, McpCallOptions>();
+  private dispatchGuard?: (server: string) => void;
   constructor(readonly config: McpConfig[]) {
     if (new Set(config.map((c) => c.name)).size !== config.length)
       throw new PolicyError("Nomes MCP duplicados");
@@ -240,11 +242,54 @@ export class McpGateway implements ToolGateway {
         !["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)
       )
         throw new PolicyError("MCP fora de loopback exige HTTPS");
+      if (
+        (item.cuaViewer !== undefined && typeof item.cuaViewer !== "boolean") ||
+        (item.cuaViewer &&
+          (item.mode !== "direct" ||
+            url.protocol !== "https:" ||
+            url.pathname !== "/mcp"))
+      )
+        throw new PolicyError(
+          "Viewer CUA exige modo direto e endpoint HTTPS /mcp",
+        );
       if (item.readTools.some((t) => item.actionTools.includes(t)))
         throw new PolicyError(
           "MCP tool não pode ser leitura e ação ao mesmo tempo",
         );
     }
+  }
+  setDispatchGuard(guard: (server: string) => void) {
+    this.dispatchGuard = guard;
+  }
+  serverOrigin(server: string) {
+    const config = this.config.find((item) => item.name === server);
+    if (!config) throw new PolicyError("Servidor MCP não autorizado");
+    return new URL(config.url).origin;
+  }
+  hasActiveOrigin(origin: string) {
+    return [...this.active.keys()].some(
+      (server) => this.serverOrigin(server) === origin,
+    );
+  }
+  // Internal-only credential handoff. Never include this value in snapshots or tool results.
+  viewerCredential(server: string) {
+    const config = this.config.find((item) => item.name === server);
+    if (!config?.cuaViewer)
+      throw new PolicyError("Viewer CUA não habilitado neste servidor");
+    let token = config.token;
+    if (!token && config.tokenFile) {
+      try {
+        token = readFileSync(config.tokenFile, "utf8").trim();
+      } catch {
+        throw new PolicyError("Arquivo de token MCP indisponível");
+      }
+    }
+    if (!token || /[\r\n]/.test(token))
+      throw new PolicyError("Viewer CUA requer token MCP configurado");
+    const binding = createHash("sha256")
+      .update(JSON.stringify([config.url, token, config.tokenFile]))
+      .digest("hex");
+    return { origin: this.serverOrigin(server), token, binding };
   }
   credentialBinding(server: string) {
     const c = this.config.find((c) => c.name === server);
@@ -456,6 +501,7 @@ export class McpGateway implements ToolGateway {
       server,
       async () => {
         for (let attempt = 0; ; attempt++) {
+          this.dispatchGuard?.(server);
           if (options.signal?.aborted)
             throw new McpNotSentError("Chamada MCP cancelada antes do envio.");
           let client: Client;
@@ -478,6 +524,7 @@ export class McpGateway implements ToolGateway {
             throw new McpNotSentError(
               "Ferramenta MCP exige execução baseada em tarefas, não suportada nesta conexão. Nenhuma chamada de ferramenta foi enviada.",
             );
+          this.dispatchGuard?.(server);
           this.active.set(server, options);
           try {
             // A session can still end after the probe. Once callTool starts,

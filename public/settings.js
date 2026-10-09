@@ -39,6 +39,7 @@ const names = (value) => [
 const config = (server) => ({
   name: server.name,
   url: server.url,
+  cuaViewer: server.cuaViewer === true,
   readTools: [...(server.readTools || [])],
   actionTools: [...(server.actionTools || [])],
   ...(server.mode ? { mode: server.mode } : {}),
@@ -684,6 +685,7 @@ export function configureUI(api, callbacks) {
     $("mcp-name").value = server?.name || "";
     $("mcp-name").readOnly = Boolean(server);
     $("mcp-url").value = server?.url || "";
+    $("mcp-cua-viewer").checked = server?.cuaViewer === true;
     $("mcp-token-file").value = server?.tokenFile || "";
     $("mcp-token-file-details").hidden = !server?.tokenFile;
     $("mcp-token").disabled = Boolean(server?.tokenFile);
@@ -744,6 +746,16 @@ export function configureUI(api, callbacks) {
         "Use HTTPS (HTTP somente em loopback), sem credenciais, query ou fragmento na URL.",
       );
     const readTools = names($("mcp-read-tools").value);
+    const cuaViewer = $("mcp-cua-viewer").checked;
+    if (
+      cuaViewer &&
+      (editorMode !== "direct" ||
+        parsed.protocol !== "https:" ||
+        parsed.pathname !== "/mcp")
+    )
+      throw new Error(
+        "O acesso humano CUA exige integração automática e um endpoint HTTPS /mcp.",
+      );
     const actionTools = names($("mcp-action-tools").value);
     if (
       editorMode === "legacy" &&
@@ -769,6 +781,7 @@ export function configureUI(api, callbacks) {
     return {
       name,
       url,
+      cuaViewer,
       readTools,
       actionTools,
       ...(editorMode === "direct"

@@ -19,6 +19,7 @@ const { errorText, t, text, attr, plain, locale } = globalThis.PiI18n || {
   locale: () => "pt-BR",
 };
 import { configureUI } from "/settings.js";
+import { renderCuaHandoffs } from "/cua-handoffs.js";
 import { renderMarkdown, renderTextPreview } from "/markdown.js";
 import { historyWindow } from "/history.js";
 import { attachConversationManagementUI } from "/conversations.js";
@@ -888,6 +889,7 @@ function render(snapshot) {
   };
   const actionSource = JSON.stringify([
     snapshot.actions,
+    snapshot.cuaHandoffs || [],
     (snapshot.mcpInteractions || []).filter((i) => i.state === "pending"),
     (snapshot.mcpCalls || []).filter((call) => call.state === "uncertain"),
   ]);
@@ -1012,6 +1014,22 @@ function render(snapshot) {
       }
       return card;
     });
+    cards.push(
+      ...renderCuaHandoffs(snapshot.cuaHandoffs || [], actionConversation, {
+        node,
+        t,
+        text,
+        errorText,
+        locale,
+        api,
+        refresh: async (target) => {
+          const updated = await api(
+            `/api/conversations/${encodeURIComponent(target)}`,
+          );
+          if (target === conversationId) render(updated);
+        },
+      }),
+    );
     const nativeInteractions = (snapshot.mcpInteractions || []).filter(
       (i) => i.state === "pending",
     );
@@ -1276,6 +1294,7 @@ function render(snapshot) {
     }
     const encodedActions = JSON.stringify([
       snapshot.actions,
+      snapshot.cuaHandoffs || [],
       nativeInteractions,
       uncertainCalls,
     ]);

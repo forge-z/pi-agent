@@ -754,6 +754,82 @@ globalThis.PiEnglish = {
   "Aplicação encerrando; nenhuma chamada MCP foi enviada":
     "The application is shutting down; no MCP call was sent",
   "Chamada MCP cancelada antes do envio.": "MCP call canceled before sending.",
+  "Permitir acesso humano temporário ao desktop CUA":
+    "Allow temporary human access to the CUA desktop",
+  "Usa a credencial existente desta conexão para criar um ticket restrito de 30 minutos. O Pi pausa até a devolução explícita do controle.":
+    "Uses this connection's existing credential to create a restricted 30-minute ticket. Pi pauses until control is explicitly returned.",
+  "O acesso humano CUA exige integração automática e um endpoint HTTPS /mcp.":
+    "Human CUA access requires automatic integration and an HTTPS /mcp endpoint.",
+  "Intervenção humana · {0}": "Human intervention · {0}",
+  "O Pi está pausado para este desktop.": "Pi is paused for this desktop.",
+  "Sem transferência de arquivos, clipboard ou microfone.":
+    "No file transfer, clipboard, or microphone access.",
+  "Crie um acesso privado de 30 minutos ao mesmo desktop para assumir esta etapa.":
+    "Create private access to this same desktop for 30 minutes to take over this step.",
+  "Criar acesso privado": "Create private access",
+  "Cancelar intervenção": "Cancel intervention",
+  "Este ticket permite entrar por 30 minutos. Uma conexão aberta pode continuar após esse prazo. Feche todas as abas do viewer antes de devolver o controle. Sua confirmação não revoga o ticket no serviço.":
+    "This ticket is valid for 30 minutes. An open connection may continue after it expires. Close every viewer tab before returning control. Your confirmation does not revoke the ticket at the service.",
+  "Ticket válido até {0}": "Ticket valid until {0}",
+  "Abrir desktop privado": "Open private desktop",
+  "O link não está disponível. O Pi continua pausado.":
+    "The link is unavailable. Pi remains paused.",
+  "Fechei todas as abas do viewer.": "I closed all viewer tabs.",
+  "Quero devolver o controle ao Pi.": "I want to return control to Pi.",
+  "Retomar o Pi": "Resume Pi",
+  "Confirme que fechou todas as abas e quer devolver o controle ao Pi.":
+    "Confirm that you closed all tabs and want to return control to Pi.",
+  "A criação do acesso está em andamento. Aguarde sem repetir o pedido.":
+    "Access creation is in progress. Wait without repeating the request.",
+  "O resultado da criação é incerto. O Pi permanece pausado; verifique o serviço antes de qualquer recuperação.":
+    "The creation result is uncertain. Pi remains paused; check the service before attempting recovery.",
+  "Resposta CUA inválida; o acesso permanece pausado. Nenhum link foi disponibilizado.":
+    "Invalid CUA response; access remains paused. No link was made available.",
+  "Acesso CUA exige origem HTTPS e a credencial existente no servidor.":
+    "CUA access requires an HTTPS origin and the credential already configured on the server.",
+  "Aguarde a execução e resolva chamadas MCP pendentes ou incertas antes de abrir o viewer CUA.":
+    "Wait for the run to finish and resolve pending or uncertain MCP calls before opening the CUA viewer.",
+  "CUA pausado para intervenção humana. Nenhuma chamada MCP foi enviada.":
+    "CUA is paused for human intervention. No MCP call was sent.",
+  "Intervenção CUA não encontrada nesta conversa.":
+    "CUA handoff not found in this conversation.",
+  "Serviço encerrando; intervenção CUA indisponível.":
+    "The service is shutting down; CUA handoff is unavailable.",
+  "Identidade de intervenção CUA usada com outro servidor.":
+    "This CUA handoff identity was used with a different server.",
+  "Já existe uma intervenção CUA pendente para esta conversa ou origem.":
+    "A CUA handoff is already pending for this conversation or origin.",
+  "Acesso CUA já criado ou incerto; não será emitido novamente.":
+    "CUA access was already created or has an uncertain result; it will not be issued again.",
+  "Conexão CUA indisponível; a intervenção permanece pausada.":
+    "CUA connection is unavailable; the handoff remains paused.",
+  "Conexão CUA mudou; a intervenção permanece incerta e pausada.":
+    "The CUA connection changed; the handoff remains uncertain and paused.",
+  "Criação do acesso CUA falhou; verifique o estado da intervenção. Nenhum acesso será repetido automaticamente.":
+    "CUA access creation failed; check the handoff status. Access will not be retried automatically.",
+  "Confirme o cancelamento da intervenção CUA pendente.":
+    "Confirm cancellation of the pending CUA handoff.",
+  "Criação CUA incerta ou em andamento; o controle não pode ser liberado.":
+    "CUA creation is uncertain or still in progress; control cannot be released.",
+  "Confirme que todas as abas do viewer foram fechadas e que o controle foi devolvido.":
+    "Confirm that all viewer tabs are closed and control has been returned.",
+  "Resolva a intervenção humana CUA antes de alterar MCP.":
+    "Resolve the CUA handoff before changing MCP settings.",
+  "Conversa pausada para intervenção humana CUA. Aguarde a devolução explícita do controle pela interface.":
+    "Conversation paused for human CUA intervention. Wait for control to be explicitly returned through the interface.",
+  "Conversa pausada para intervenção humana CUA. Devolva o controle pela interface antes de continuar.":
+    "Conversation paused for human CUA intervention. Return control through the interface before continuing.",
+  "Viewer CUA indisponível neste ambiente.":
+    "The CUA viewer is unavailable in this environment.",
+  "Viewer CUA exige endpoint HTTPS /mcp":
+    "The CUA viewer requires an HTTPS /mcp endpoint.",
+  "Viewer CUA exige modo direto e endpoint HTTPS /mcp":
+    "The CUA viewer requires direct mode and an HTTPS /mcp endpoint.",
+  "Viewer CUA não habilitado neste servidor":
+    "The CUA viewer is not enabled on this server.",
+  "Viewer CUA requer token MCP configurado":
+    "The CUA viewer requires a configured MCP token.",
+  "Arquivo de token MCP indisponível": "The MCP token file is unavailable.",
 };
 globalThis.PiInterfaceErrors = [
   "Aguarde a chamada ou retomada MCP em andamento; nenhuma nova ferramenta foi enviada",
@@ -826,4 +902,30 @@ globalThis.PiInterfaceErrors = [
   "Conecte o provider desta conversa antes de enviar mensagens ou executar tarefas",
   "Conecte o provider desta conversa antes de compactar o contexto",
   "Aguarde a conexão do provider concluir antes de executar a conversa",
+  "O acesso humano CUA exige integração automática e um endpoint HTTPS /mcp.",
+  "Confirme que fechou todas as abas e quer devolver o controle ao Pi.",
+  "Resposta CUA inválida; o acesso permanece pausado. Nenhum link foi disponibilizado.",
+  "Acesso CUA exige origem HTTPS e a credencial existente no servidor.",
+  "Aguarde a execução e resolva chamadas MCP pendentes ou incertas antes de abrir o viewer CUA.",
+  "CUA pausado para intervenção humana. Nenhuma chamada MCP foi enviada.",
+  "Intervenção CUA não encontrada nesta conversa.",
+  "Serviço encerrando; intervenção CUA indisponível.",
+  "Identidade de intervenção CUA usada com outro servidor.",
+  "Já existe uma intervenção CUA pendente para esta conversa ou origem.",
+  "Acesso CUA já criado ou incerto; não será emitido novamente.",
+  "Conexão CUA indisponível; a intervenção permanece pausada.",
+  "Conexão CUA mudou; a intervenção permanece incerta e pausada.",
+  "Criação do acesso CUA falhou; verifique o estado da intervenção. Nenhum acesso será repetido automaticamente.",
+  "Confirme o cancelamento da intervenção CUA pendente.",
+  "Criação CUA incerta ou em andamento; o controle não pode ser liberado.",
+  "Confirme que todas as abas do viewer foram fechadas e que o controle foi devolvido.",
+  "Resolva a intervenção humana CUA antes de alterar MCP.",
+  "Conversa pausada para intervenção humana CUA. Aguarde a devolução explícita do controle pela interface.",
+  "Conversa pausada para intervenção humana CUA. Devolva o controle pela interface antes de continuar.",
+  "Viewer CUA indisponível neste ambiente.",
+  "Viewer CUA exige endpoint HTTPS /mcp",
+  "Viewer CUA exige modo direto e endpoint HTTPS /mcp",
+  "Viewer CUA não habilitado neste servidor",
+  "Viewer CUA requer token MCP configurado",
+  "Arquivo de token MCP indisponível",
 ];

@@ -184,6 +184,10 @@ export class Settings {
     }));
   }
   async saveMcp(value: unknown) {
+    if (this.app.cuaHandoffs?.anyHeld())
+      throw new SettingsError(
+        "Resolva a intervenção humana CUA antes de alterar MCP.",
+      );
     if (!Array.isArray(value) || value.length > 20)
       throw new SettingsError("Informe até 20 servidores MCP");
     const gateway = this.gateway();
@@ -233,6 +237,8 @@ export class Settings {
         mode: item.mode ?? old?.mode ?? "legacy",
         readTools: item.readTools ?? old?.readTools ?? [],
         actionTools: item.actionTools ?? old?.actionTools ?? [],
+        cuaViewer:
+          item.cuaViewer === undefined ? old?.cuaViewer : item.cuaViewer,
         ...(item.allowedTools !== undefined
           ? { allowedTools: item.allowedTools }
           : old && old.mode !== "direct" && item.mode === "direct"
