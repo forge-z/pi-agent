@@ -365,7 +365,7 @@ export function createAppServer(app: Runtime, options: ServerOptions) {
             response,
             200,
             operation === "create"
-              ? await app.cuaHandoffs.create(id, handoffId)
+              ? await app.cuaHandoffs.create(id, handoffId, input)
               : app.cuaHandoffs.end(id, handoffId, input),
           );
         }

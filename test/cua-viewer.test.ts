@@ -255,3 +255,105 @@ test("transport faults, bad trailers, malformed protobuf and oversized replies n
     assert.equal(calls, 1);
   }
 });
+
+test("explicit clipboard consent changes only the exact request grant and normalizes the native true viewer path", async () => {
+  const f = fixture({
+    grant: { ...grant, c: true },
+    path: (t) => `/viewer/#ticket=${t}`,
+  });
+  let calls = 0;
+  const api = client(async (_input, options) => {
+    calls++;
+    const body = Buffer.from(options?.body as Uint8Array);
+    const expected = Buffer.concat([
+      Buffer.from("0a0308880e10031801220028003245", "hex"),
+      Buffer.from([10, 47]),
+      Buffer.from(principal),
+      Buffer.from([18, 16]),
+      Buffer.from("Pi human handoff"),
+      Buffer.from([32, 1]),
+    ]);
+    assert.equal(body[0], 0);
+    assert.equal(body.readUInt32BE(1), expected.length);
+    assert.deepEqual(body.subarray(5), expected);
+    return response(f.wire);
+  });
+  const result = await api.createTicket(principal, true);
+  const params = new URLSearchParams(new URL(result.url).hash.slice(1));
+  assert.equal(params.get("clipboard"), "1");
+  assert.equal(params.get("ticket"), f.ticket);
+  assert.equal(params.getAll("clipboard").length, 1);
+  assert.equal(calls, 1);
+});
+
+test("signed clipboard grants must match the chosen Boolean exactly while all other restrictions remain fixed", async () => {
+  for (const choice of [false, true]) {
+    for (const changed of [
+      { c: !choice },
+      { c: choice ? 1 : 0 },
+      { c: String(choice) },
+      { p: 1 },
+      { u: true },
+      { f: "/home/user" },
+      { i: "viewer:other" },
+    ]) {
+      const f = fixture({
+        grant: { ...grant, c: choice, ...changed },
+        path: (t) => `/viewer/#ticket=${t}${choice ? "" : "&clipboard=0"}`,
+      });
+      await assert.rejects(
+        client(async () => response(f.wire)).createTicket(principal, choice),
+        CuaViewerError,
+      );
+    }
+  }
+});
+
+test("clipboard-enabled viewer URLs accept only the native absent flag or exact1 and reject scope injection", async () => {
+  for (const path of [
+    (t: string) => `/viewer/#ticket=${t}`,
+    (t: string) => `/viewer/#ticket=${t}&clipboard=1`,
+  ]) {
+    const f = fixture({ grant: { ...grant, c: true }, path });
+    const result = await client(async () => response(f.wire)).createTicket(
+      principal,
+      true,
+    );
+    assert.equal(
+      new URLSearchParams(new URL(result.url).hash.slice(1)).get("clipboard"),
+      "1",
+    );
+  }
+  for (const path of [
+    (t: string) => `/viewer/#ticket=${t}&clipboard=0`,
+    (t: string) => `/viewer/#ticket=${t}&clipboard=true`,
+    (t: string) => `/viewer/#ticket=${t}&clipboard=1&clipboard=1`,
+    (t: string) => `/viewer/#ticket=${t}&ticket=${t}`,
+    (t: string) => `/viewer/#ticket=${t}&files=~`,
+    (t: string) => `/viewer/#ticket=${t}&audio=1`,
+    (t: string) => `/viewer/?clipboard=1#ticket=${t}`,
+    (t: string) => `https://evil.example/viewer/#ticket=${t}&clipboard=1`,
+    (t: string) => `//evil.example/viewer/#ticket=${t}&clipboard=1`,
+    (t: string) => `/viewer/#ticket=${t}\n`,
+  ]) {
+    const f = fixture({ grant: { ...grant, c: true }, path });
+    await assert.rejects(
+      client(async () => response(f.wire)).createTicket(principal, true),
+      CuaViewerError,
+    );
+  }
+});
+
+test("malformed clipboard choices reject before ticket dispatch", async () => {
+  let calls = 0;
+  const api = client(async () => {
+    calls++;
+    return response(fixture().wire);
+  });
+  for (const choice of ["true", 1, 0, null, {}, []])
+    await assert.rejects(
+      api.createTicket(principal, choice as boolean),
+      (error) => error instanceof CuaViewerError && !error.dispatched,
+    );
+  assert.equal(calls, 0);
+});

@@ -154,13 +154,18 @@ export class CuaViewerClient {
     this.transport = options.fetch ?? fetch;
     this.clock = options.clock ?? Date.now;
   }
-  async createTicket(principalId: string): Promise<CuaViewerTicket> {
+  async createTicket(
+    principalId: string,
+    clipboard = false,
+  ): Promise<CuaViewerTicket> {
+    if (typeof clipboard !== "boolean")
+      throw new CuaViewerError("Opção de clipboard CUA inválida.");
     if (!/^pi-handoff-[a-f0-9-]{36}$/.test(principalId)) throw invalid();
     const started = this.clock();
     const request = Buffer.concat([
       bytes(1, integer(1, CUA_VIEWER_TTL_SECONDS)),
       integer(2, 3), // SESSION_POLICY_ALLOW_ACTIVATION: mouse/keyboard in this desktop.
-      integer(3, 0),
+      integer(3, clipboard ? 1 : 0),
       bytes(4, ""),
       integer(5, 0),
       bytes(
@@ -188,7 +193,7 @@ export class CuaViewerClient {
       )
         throw invalid();
       if (value.has(4) && string(value.get(4)) !== "") throw invalid();
-      this.verifyTicket(ticket, expiresAt, principalId);
+      this.verifyTicket(ticket, expiresAt, principalId, clipboard);
       const path = string(value.get(3));
       if (!path.startsWith("/viewer/#") || /[\u0000-\u0020\u007f]/.test(path))
         throw invalid();
@@ -202,20 +207,30 @@ export class CuaViewerClient {
         url.password ||
         fragment.getAll("ticket").length !== 1 ||
         fragment.get("ticket") !== ticket ||
-        fragment.get("clipboard") !== "0" ||
+        (clipboard
+          ? fragment.getAll("clipboard").length > 1 ||
+            (fragment.has("clipboard") && fragment.get("clipboard") !== "1")
+          : fragment.getAll("clipboard").length !== 1 ||
+            fragment.get("clipboard") !== "0") ||
         [...fragment.keys()].some(
           (key) => !["ticket", "clipboard"].includes(key),
         ) ||
-        fragment.getAll("clipboard").length !== 1 ||
         url.href.includes(this.#token)
       )
         throw invalid();
+      fragment.set("clipboard", clipboard ? "1" : "0");
+      url.hash = fragment.toString();
       return { url: url.href, expiresAt, principalId: `viewer:${principalId}` };
     } catch {
       throw invalid(true);
     }
   }
-  private verifyTicket(ticket: string, expiresAt: number, principalId: string) {
+  private verifyTicket(
+    ticket: string,
+    expiresAt: number,
+    principalId: string,
+    clipboard: boolean,
+  ) {
     if (
       ticket.length > 8192 ||
       !/^v1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(ticket)
@@ -241,7 +256,7 @@ export class CuaViewerClient {
     const grant = JSON.parse(claims.r);
     if (
       grant.p !== 3 ||
-      grant.c !== false ||
+      grant.c !== clipboard ||
       grant.u !== false ||
       grant.f != null ||
       grant.i !== `viewer:${principalId}` ||

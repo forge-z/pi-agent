@@ -13,7 +13,7 @@ export function renderCuaHandoffs(rows, conversation, ui) {
         label("p", "O Pi está pausado para este desktop.", "action-note"),
         label(
           "p",
-          "Sem transferência de arquivos, clipboard ou microfone.",
+          "Sem transferência de arquivos ou acesso ao microfone.",
           "action-note",
         ),
       );
@@ -56,18 +56,55 @@ export function renderCuaHandoffs(rows, conversation, ui) {
         };
         return button;
       };
+      const check = (suffix, source) => {
+        const input = node("input");
+        input.type = "checkbox";
+        input.id = `cua-${suffix}-${row.id}`;
+        const line = node("label", undefined, "checkbox-line");
+        line.htmlFor = input.id;
+        line.append(input, label("span", source));
+        controls.push(input);
+        card.append(line);
+        return input;
+      };
       if (row.state === "pending") {
+        const clipboard = check(
+          "clipboard",
+          "Habilitar clipboard bidirecional nesta intervenção",
+        );
+        clipboard.checked = row.clipboard === true;
+        card.append(
+          label(
+            "p",
+            "Sincroniza o que você copia no Mac e no desktop CUA nos dois sentidos. Senhas e códigos copiados também podem ser compartilhados.",
+            "action-note",
+          ),
+        );
         card.append(
           label(
             "p",
             "Crie um acesso privado de 30 minutos ao mesmo desktop para assumir esta etapa.",
             "action-note",
           ),
-          action("Criar acesso privado", "create", () => ({})),
+          action("Criar acesso privado", "create", () => ({
+            clipboard: clipboard.checked,
+          })),
           action("Cancelar intervenção", "end", () => ({ cancel: true })),
         );
       } else if (row.state === "active") {
         card.append(
+          label(
+            "p",
+            row.clipboard === true
+              ? "Clipboard bidirecional habilitado neste ticket."
+              : "Clipboard desabilitado neste ticket.",
+            "action-note",
+          ),
+          label(
+            "p",
+            "A escolha é fixa neste ticket. Para mudar a permissão, feche todas as abas, devolva o controle e solicite uma nova intervenção.",
+            "action-note",
+          ),
           label(
             "p",
             "Este ticket permite entrar por 30 minutos. Uma conexão aberta pode continuar após esse prazo. Feche todas as abas do viewer antes de devolver o controle. Sua confirmação não revoga o ticket no serviço.",
@@ -92,7 +129,7 @@ export function renderCuaHandoffs(rows, conversation, ui) {
             url.pathname === "/viewer/" &&
             !url.search &&
             params.get("ticket") &&
-            params.get("clipboard") === "0" &&
+            params.get("clipboard") === (row.clipboard === true ? "1" : "0") &&
             [...params.keys()].length === 2
           ) {
             const link = label("a", "Abrir desktop privado");
@@ -118,17 +155,6 @@ export function renderCuaHandoffs(rows, conversation, ui) {
             ),
           );
         }
-        const check = (suffix, source) => {
-          const input = node("input");
-          input.type = "checkbox";
-          input.id = `cua-${suffix}-${row.id}`;
-          const line = node("label", undefined, "checkbox-line");
-          line.htmlFor = input.id;
-          line.append(input, label("span", source));
-          controls.push(input);
-          card.append(line);
-          return input;
-        };
         const closed = check("closed", "Fechei todas as abas do viewer.");
         const returned = check("returned", "Quero devolver o controle ao Pi.");
         card.append(

@@ -34,6 +34,7 @@ type Row = {
   state: string;
   url?: string | null;
   expiresAt?: number;
+  clipboard?: boolean;
 };
 function fixture(
   rows: Row[],
@@ -66,6 +67,7 @@ function fixture(
   });
   const all = cards.flatMap((card) => card.all());
   return {
+    i18n,
     cards,
     all,
     calls,
@@ -101,7 +103,7 @@ test("a pending handoff creates only on explicit click, binds to its original co
   assert.deepEqual(view.calls[0], {
     path: "/api/conversations/17/cua-handoffs/request/create",
     method: "POST",
-    body: {},
+    body: { clipboard: false },
   });
   resolve();
   await pending;
@@ -117,6 +119,114 @@ test("a pending handoff creates only on explicit click, binds to its original co
   await failed.button("Criar acesso privado").onclick!();
   assert.equal(failed.calls.length, 1);
   assert.deepEqual(failed.refreshed, ["17"]);
+});
+test("pending clipboard opt-in is visible, starts off and sends only the human-selected boolean", async () => {
+  const rows = [{ id: "request", server: "desktop", state: "pending" }];
+  const view = fixture(rows);
+  const checkbox = view.all.find(
+    (item) => item.id === "cua-clipboard-request",
+  )!;
+  assert.ok(checkbox, "human clipboard control is present");
+  assert.equal(checkbox.type, "checkbox");
+  assert.equal(checkbox.checked, false);
+  assert.match(
+    view.all.map((item) => item.textContent).join(" "),
+    /bidirecional.*Senhas e códigos/,
+  );
+  checkbox.checked = true;
+  await view.button("Criar acesso privado").onclick!();
+  assert.deepEqual(view.calls[0].body, { clipboard: true });
+  const disabled = fixture(rows);
+  const off = disabled.all.find((item) => item.id === "cua-clipboard-request")!;
+  off.checked = true;
+  off.checked = false;
+  await disabled.button("Criar acesso privado").onclick!();
+  assert.deepEqual(disabled.calls[0].body, { clipboard: false });
+});
+test("the checkbox is locked during mint and language switching preserves its human choice", async () => {
+  let release!: () => void;
+  const view = fixture(
+    [{ id: "request", server: "desktop", state: "pending" }],
+    {
+      language: "en",
+      api: () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        }),
+    },
+  );
+  const checkbox = view.all.find(
+    (item) => item.id === "cua-clipboard-request",
+  )!;
+  assert.ok(checkbox);
+  checkbox.checked = true;
+  assert.ok(
+    view.all.some(
+      (item) =>
+        item.textContent === "Enable bidirectional clipboard for this handoff",
+    ),
+  );
+  const pending = view.button("Create private access").onclick!();
+  assert.equal(checkbox.disabled, true);
+  assert.deepEqual(view.calls[0].body, { clipboard: true });
+  view.i18n.setLanguage("pt-BR");
+  assert.equal(checkbox.checked, true);
+  assert.equal(checkbox.disabled, true);
+  assert.ok(
+    view.all.some(
+      (item) =>
+        item.textContent ===
+        "Habilitar clipboard bidirecional nesta intervenção",
+    ),
+  );
+  release();
+  await pending;
+  assert.equal(checkbox.checked, true);
+  assert.equal(checkbox.disabled, false);
+});
+test("active clipboard status matches the immutable ticket grant and mismatched links are hidden", () => {
+  for (const clipboard of [false, true]) {
+    const row = {
+      ...active,
+      clipboard,
+      url: `https://desktop.example/viewer/#ticket=mock-ticket&clipboard=${clipboard ? 1 : 0}`,
+    };
+    const view = fixture([row]);
+    assert.equal(view.all.filter((item) => item.tag === "a").length, 1);
+    assert.match(
+      view.all.map((item) => item.textContent).join(" "),
+      clipboard
+        ? /Clipboard bidirecional habilitado neste ticket/
+        : /Clipboard desabilitado neste ticket/,
+    );
+    assert.equal(view.all.filter((item) => item.type === "checkbox").length, 2);
+    const mismatch = fixture([
+      {
+        ...row,
+        url: `https://desktop.example/viewer/#ticket=mock-ticket&clipboard=${clipboard ? 0 : 1}`,
+      },
+    ]);
+    assert.equal(
+      mismatch.all.some((item) => item.tag === "a"),
+      false,
+    );
+  }
+  const en = fixture(
+    [
+      {
+        ...active,
+        clipboard: true,
+        url: "https://desktop.example/viewer/#ticket=mock-ticket&clipboard=1",
+      },
+    ],
+    { language: "en" },
+  );
+  assert.ok(
+    en.all.some(
+      (item) =>
+        item.textContent === "Bidirectional clipboard enabled in this ticket.",
+    ),
+  );
 });
 test("active handoff requires both human acknowledgments and clearly states the connection and revocation limits", async () => {
   const view = fixture([active]);

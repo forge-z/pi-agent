@@ -764,6 +764,20 @@ globalThis.PiEnglish = {
   "O Pi está pausado para este desktop.": "Pi is paused for this desktop.",
   "Sem transferência de arquivos, clipboard ou microfone.":
     "No file transfer, clipboard, or microphone access.",
+  "Sem transferência de arquivos ou acesso ao microfone.":
+    "No file transfer or microphone access.",
+  "Habilitar clipboard bidirecional nesta intervenção":
+    "Enable bidirectional clipboard for this handoff",
+  "Sincroniza o que você copia no Mac e no desktop CUA nos dois sentidos. Senhas e códigos copiados também podem ser compartilhados.":
+    "Syncs what you copy on your Mac and the CUA desktop in both directions. Copied passwords and codes may also be shared.",
+  "Clipboard bidirecional habilitado neste ticket.":
+    "Bidirectional clipboard enabled in this ticket.",
+  "Clipboard desabilitado neste ticket.": "Clipboard disabled in this ticket.",
+  "A escolha é fixa neste ticket. Para mudar a permissão, feche todas as abas, devolva o controle e solicite uma nova intervenção.":
+    "The choice is fixed in this ticket. To change the permission, close every tab, return control, and request a new handoff.",
+  "Permissões CUA inválidas: informe apenas clipboard como booleano.":
+    "Invalid CUA permissions: provide only clipboard as a boolean.",
+  "Opção de clipboard CUA inválida.": "Invalid CUA clipboard option.",
   "Crie um acesso privado de 30 minutos ao mesmo desktop para assumir esta etapa.":
     "Create private access to this same desktop for 30 minutes to take over this step.",
   "Criar acesso privado": "Create private access",
@@ -832,6 +846,8 @@ globalThis.PiEnglish = {
   "Arquivo de token MCP indisponível": "The MCP token file is unavailable.",
 };
 globalThis.PiInterfaceErrors = [
+  "Permissões CUA inválidas: informe apenas clipboard como booleano.",
+  "Opção de clipboard CUA inválida.",
   "Aguarde a chamada ou retomada MCP em andamento; nenhuma nova ferramenta foi enviada",
   "Aplicação encerrando; nenhuma chamada MCP foi enviada",
   "Chamada MCP cancelada antes do envio.",
