@@ -946,3 +946,169 @@ test("outcomes arriving during a settings reservation defer without CUA and drai
     await f.close();
   }
 });
+
+test("CUA release feedback waits for a valid human input and cannot release a newer hold or duplicate after a receipt crash", async () => {
+  const f = await nativeFixture();
+  try {
+    let app = f.app;
+    const id = await app.create();
+    const first = app.cuaHandoffs!.request(id, 900, "cua");
+    app.cuaHandoffs!.end(id, first.id, { cancel: true });
+    assert.equal(f.faux.state.callCount, 0);
+    await app.submit(
+      id,
+      "scheduled-after-cancel",
+      "Previously authorized task",
+      "task",
+    );
+    await settle(app, id);
+    assert.equal(
+      (await nativeEntries(app, id)).filter(
+        (entry) => entry.kind === "app.cua-control",
+      ).length,
+      0,
+    );
+    await assert.rejects(app.submit(id, "invalid input", "continue"));
+    await assert.rejects(
+      app.submit(id, "revoked-owner", "continue", "web", null, () => {
+        throw new Error("mock revoked owner");
+      }),
+      /revoked owner/,
+    );
+    assert.equal(
+      (await nativeEntries(app, id)).filter(
+        (entry) => entry.kind === "app.cua-control",
+      ).length,
+      0,
+    );
+    const second = app.cuaHandoffs!.request(id, 901, "cua");
+    app.cuaHandoffs!.end(id, first.id, {
+      allTabsClosed: true,
+      controlReturned: true,
+    });
+    await assert.rejects(
+      app.admit(id, "newer-hold", "Continue", { source: "web" }),
+      ConversationBusyError,
+    );
+    assert.equal(app.cuaHandoffs!.list(id)[1].state, "pending");
+    assert.equal(
+      (await nativeEntries(app, id)).filter(
+        (entry) => entry.kind === "app.cua-control",
+      ).length,
+      0,
+    );
+    app.cuaHandoffs!.end(id, second.id, { cancel: true });
+    await Promise.all([
+      app.admit(id, "human-one", "Continue one", { source: "web" }),
+      app.admit(id, "human-two", "Continue two", { source: "web" }),
+    ]);
+    await settle(app, id);
+    const notes = (await nativeEntries(app, id)).filter(
+      (entry) => entry.kind === "app.cua-control",
+    );
+    assert.equal(notes.length, 2);
+    assert.match(JSON.stringify(notes), /requestCancelled/);
+    assert.doesNotMatch(
+      JSON.stringify(notes),
+      /"disposition":"controlReturned"/,
+    );
+    for (const request of [first, second]) {
+      const receipt = await app.harness.commit(
+        (tx) =>
+          tx.submissionByRequest(
+            Number(id) as Parameters<typeof tx.submissionByRequest>[0],
+            `cua-control/${request.id}`,
+          ),
+        context,
+      );
+      assert.equal(receipt!.type, "write");
+      assert.equal(receipt!.status, "done");
+    }
+    const calls = f.faux.state.callCount;
+    app.store.run(
+      "UPDATE cua_handoffs SET feedbackSubmissionId=NULL WHERE conversationId=?",
+      id,
+    );
+    app = await f.reopen();
+    assert.equal(f.faux.state.callCount, calls);
+    assert.equal(
+      (await nativeEntries(app, id)).filter(
+        (entry) => entry.kind === "app.cua-control",
+      ).length,
+      2,
+    );
+    await app.admit(id, "human-after-receipt-crash", "Continue after restart", {
+      source: "web",
+    });
+    await settle(app, id);
+    assert.equal(
+      (await nativeEntries(app, id)).filter(
+        (entry) => entry.kind === "app.cua-control",
+      ).length,
+      2,
+    );
+    assert.equal(f.counts.writes, 0);
+    assert.equal(f.counts.resumes, 0);
+    assert.equal(f.counts.tickets, 0);
+  } finally {
+    await f.close();
+  }
+});
+
+test("a queued CUA feedback receipt remains recoverable until its passive history write finishes", async () => {
+  let entered!: () => void;
+  let release!: () => void;
+  const started = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const f = await nativeFixture([
+    async () => {
+      entered();
+      await gate;
+      return fauxAssistantMessage("Original request finished.");
+    },
+    fauxAssistantMessage("Next human request finished."),
+  ]);
+  try {
+    const app = f.app;
+    const id = await app.create();
+    await app.admit(id, "initial-human", "Start explicitly", { source: "web" });
+    await started;
+    const request = app.cuaHandoffs!.request(id, 902, "cua");
+    app.cuaHandoffs!.end(id, request.id, { cancel: true });
+    await app.admit(id, "queued-human", "Continue explicitly", {
+      source: "web",
+    });
+    const receipt = await app.harness.commit(
+      (tx) =>
+        tx.submissionByRequest(
+          Number(id) as Parameters<typeof tx.submissionByRequest>[0],
+          `cua-control/${request.id}`,
+        ),
+      context,
+    );
+    assert.equal(receipt!.status, "queued");
+    assert.equal(
+      app.store.get<{ feedbackSubmissionId: number | null }>(
+        "SELECT feedbackSubmissionId FROM cua_handoffs WHERE id=?",
+        request.id,
+      )!.feedbackSubmissionId,
+      null,
+      "queued is not proof the context has been written",
+    );
+    release();
+    await settle(app, id);
+    assert.equal(
+      (await nativeEntries(app, id)).filter(
+        (entry) => entry.kind === "app.cua-control",
+      ).length,
+      1,
+    );
+  } finally {
+    release();
+    await f.close();
+  }
+});

@@ -1087,3 +1087,168 @@ test("additive migration keeps legacy active and pending grants disabled and pre
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("explicit human return reaches the next model context and durable history without running on End or restart", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "pi-cua-return-context-"));
+  const mock = gatewayFixture();
+  const faux = fauxProvider();
+  const transcripts: string[] = [];
+  faux.setResponses([
+    fauxAssistantMessage(
+      {
+        type: "toolCall",
+        id: "request-human-control",
+        name: "cua_request_handoff",
+        arguments: { server: "cua" },
+      },
+      { stopReason: "toolUse" },
+    ),
+    fauxAssistantMessage("Awaiting explicit human return."),
+    async (transcript) => {
+      transcripts.push(JSON.stringify(transcript));
+      return fauxAssistantMessage("Continuing the explicitly requested work.");
+    },
+  ]);
+  const models = createModels();
+  models.setProvider(faux.provider);
+  const options = {
+    dir,
+    gateway: mock.gateway,
+    models,
+    cuaViewerFactory: () => ({
+      createTicket: async (principal: string) => ticket(principal),
+    }),
+  };
+  let app = await Runtime.open(options);
+  const web = createAppServer(app, {
+    password: "mock-password",
+    origin: "http://localhost",
+    secureCookie: false,
+  });
+  await new Promise<void>((resolve) =>
+    web.server.listen(0, "127.0.0.1", resolve),
+  );
+  const address = web.server.address();
+  assert.ok(address && typeof address === "object");
+  const base = `http://127.0.0.1:${address.port}`;
+  let cookie = "";
+  const post = (path: string, body: unknown) =>
+    fetch(base + path, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        origin: "http://localhost",
+        cookie,
+      },
+      body: JSON.stringify(body),
+    });
+  try {
+    const id = await app.create();
+    await app.submit(id, "human-request", "Please help with the browser.");
+    await settle(app, id);
+    const request = app.cuaHandoffs!.list(id)[0];
+    assert.equal(faux.state.callCount, 2);
+    cookie = (await post("/api/login", { password: "mock-password" })).headers
+      .get("set-cookie")!
+      .split(";")[0];
+    const path = `/api/conversations/${id}/cua-handoffs/${request.id}`;
+    assert.equal((await post(path + "/create", {})).status, 200);
+    assert.equal(
+      (
+        await post(path + "/end", {
+          allTabsClosed: true,
+          controlReturned: true,
+        })
+      ).status,
+      200,
+    );
+    assert.equal(app.cuaHandoffs!.list(id)[0].state, "ended");
+    assert.equal(faux.state.callCount, 2, "End must not create a model run");
+    assert.equal(mock.tools, 0, "End must not replay an effect");
+    await web.close();
+    await app.close();
+    app = await Runtime.open(options);
+    assert.equal(
+      faux.state.callCount,
+      2,
+      "restart must not create a model run",
+    );
+    await app.admit(id, "human-continue", "Continue the task now.", {
+      source: "web",
+    });
+    await settle(app, id);
+    const entries = (
+      await (await app.conversation(id)).entries({}, 1000, undefined, context)
+    ).items;
+    const feedback = entries.filter(
+      (entry) => entry.kind === "app.cua-control",
+    );
+    assert.equal(
+      feedback.length,
+      1,
+      "the returned-control note must be persisted exactly once",
+    );
+    assert.match(JSON.stringify(feedback), /controlReturned/);
+    assert.match(transcripts[0], /controlReturned/);
+    assert.match(transcripts[0], new RegExp(request.id));
+    assert.doesNotMatch(
+      transcripts[0],
+      new RegExp(ticketSecret + "|" + rootToken),
+    );
+    assert.equal(mock.tools, 0);
+    await app.admit(id, "human-continue", "Continue the task now.", {
+      source: "web",
+    });
+    await settle(app, id);
+    assert.equal(faux.state.callCount, 3);
+    assert.equal(
+      (
+        await (await app.conversation(id)).entries({}, 1000, undefined, context)
+      ).items.filter((entry) => entry.kind === "app.cua-control").length,
+      1,
+    );
+    await app.close();
+    app = await Runtime.open(options);
+    assert.equal(
+      (
+        await (await app.conversation(id)).entries({}, 1000, undefined, context)
+      ).items.filter((entry) => entry.kind === "app.cua-control").length,
+      1,
+    );
+    assert.equal(faux.state.callCount, 3);
+  } finally {
+    if (web.server.listening) await web.close();
+    await app.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("replaying an ended handoff result describes its release while an old End cannot release a new hold", async () => {
+  const f = await fixture();
+  try {
+    const first = f.handoffs.request("1", 2000, "cua");
+    await f.handoffs.create("1", first.id);
+    f.handoffs.end("1", first.id, {
+      allTabsClosed: true,
+      controlReturned: true,
+    });
+    const replay = f.handoffs.request("1", 2000, "cua");
+    assert.equal(replay.state, "ended");
+    assert.doesNotMatch(replay.message, /automação está pausada/);
+    assert.match(replay.message, /controle.*devolvido/);
+    const second = f.handoffs.request("1", 2001, "cua");
+    f.handoffs.end("1", first.id, {
+      allTabsClosed: true,
+      controlReturned: true,
+    });
+    assert.equal(f.handoffs.holds("1"), true);
+    assert.equal(f.handoffs.list("1")[1].id, second.id);
+    assert.equal(f.handoffs.list("1")[1].state, "pending");
+    assert.doesNotMatch(
+      JSON.stringify(replay),
+      /https:|ticket=|binding|clipboard/,
+    );
+  } finally {
+    await f.close();
+  }
+});
