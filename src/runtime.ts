@@ -1,6 +1,8 @@
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { createModels, type MutableModels } from "@earendil-works/pi-ai/models";
 import { openaiProvider } from "@earendil-works/pi-ai/providers/openai";
+import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
+import { deepseekProvider } from "@earendil-works/pi-ai/providers/deepseek";
 import {
   fauxProvider,
   fauxAssistantMessage,
@@ -60,6 +62,11 @@ export class ConversationError extends Error {
     super(message);
   }
 }
+export class ConversationBusyError extends ConversationError {
+  constructor() {
+    super("Conversa em atualização. Tente novamente.", 409);
+  }
+}
 function conversationTitle(value: unknown) {
   if (
     typeof value !== "string" ||
@@ -102,8 +109,37 @@ export class Runtime {
       options.models ??
       createModels({ credentials: new SqlCredentials(this.store) });
     if (!options.models) {
-      if (options.mode === "live") this.models.setProvider(openaiProvider());
-      else {
+      if (options.mode === "live") {
+        this.models.setProvider(openaiProvider());
+        const anthropic = anthropicProvider();
+        const apiKey = anthropic.auth.apiKey!;
+        this.models.setProvider({
+          ...anthropic,
+          auth: {
+            apiKey: {
+              ...apiKey,
+              resolve: async ({ ctx, credential, signal }) => {
+                // The native adapter recognizes subscription tokens as Claude Code.
+                // Keep this registration on the standard API-key route only.
+                const key =
+                  credential?.key ?? (await ctx.env("ANTHROPIC_API_KEY"));
+                signal.throwIfAborted();
+                if (!key || key.includes("sk-ant-oat")) return undefined;
+                return apiKey.resolve({
+                  ctx: {
+                    env: async (name) =>
+                      name === "ANTHROPIC_API_KEY" ? key : undefined,
+                    fileExists: async () => false,
+                  },
+                  credential: credential ? { type: "api_key", key } : undefined,
+                  signal,
+                });
+              },
+            },
+          },
+        });
+        this.models.setProvider(deepseekProvider());
+      } else {
         const faux = fauxProvider();
         faux.setResponses(
           Array.from({ length: 10000 }, () => async (transcript) => {
@@ -342,24 +378,6 @@ export class Runtime {
             String(row.id),
             "Conversa recuperada",
           );
-          if (!options.models) {
-            const conversation = await app.harness.conversation(
-              row.id,
-              context,
-            );
-            const agent = await conversation?.agent(context);
-            if (agent?.model?.provider !== app.settings.provider)
-              await conversation?.configure(
-                {
-                  model: {
-                    provider: app.settings.provider,
-                    modelId: app.settings.defaults().modelId,
-                  },
-                  thinkingLevel: app.settings.defaults().effort,
-                },
-                context,
-              );
-          }
         }
         cursor = recovered.next;
       } while (cursor);
@@ -444,9 +462,7 @@ export class Runtime {
         ownership: { kind: "ownerless" },
         agent: {
           model: {
-            provider:
-              this.options.provider ??
-              (this.options.mode === "live" ? "openai" : "faux"),
+            provider: defaults.provider,
             modelId: defaults.modelId,
           },
           thinkingLevel: defaults.effort,
@@ -477,11 +493,24 @@ export class Runtime {
         "Conversa excluída. Recupere-a antes de continuar.",
         409,
       );
-    if (this.conversationChanges.has(id))
-      throw new ConversationError(
-        "Conversa em atualização. Tente novamente.",
-        409,
-      );
+    if (this.conversationChanges.has(id)) throw new ConversationBusyError();
+  }
+  async withConversationSettings<T>(
+    id: string,
+    operation: (
+      conversation: Awaited<ReturnType<Runtime["conversation"]>>,
+    ) => Promise<T>,
+  ) {
+    return this.withProviderAdmission(async () => {
+      const conversation = await this.conversation(id);
+      this.assertConversationAvailable(id);
+      this.conversationChanges.add(id);
+      try {
+        return await operation(conversation);
+      } finally {
+        this.conversationChanges.delete(id);
+      }
+    });
   }
   listConversations(deleted = false) {
     return this.store.all<{
@@ -723,6 +752,29 @@ export class Runtime {
     source = "web",
     chat: string | null = null,
   ) {
+    return this.withProviderAdmission(() =>
+      this.submitOnce(conversationId, requestId, text, source, chat),
+    );
+  }
+  async withProviderAdmission<T>(operation: () => Promise<T>): Promise<T> {
+    if (this.store.credentialMutation)
+      throw new SettingsError(
+        "Aguarde a conexão do provider concluir antes de executar a conversa",
+      );
+    this.store.providerAdmissions++;
+    try {
+      return await operation();
+    } finally {
+      this.store.providerAdmissions--;
+    }
+  }
+  private async submitOnce(
+    conversationId: string,
+    requestId: string,
+    text: string,
+    source = "web",
+    chat: string | null = null,
+  ) {
     if (this.closing) throw new Error("Serviço encerrando");
     if (
       !/^[\w:.-]{1,160}$/.test(requestId) ||
@@ -740,10 +792,12 @@ export class Runtime {
         conversationId,
         requestId,
       ) &&
-      !(await this.models.checkAuth(this.settings.provider))
+      !(await this.models.checkAuth(
+        (await this.settings.conversation(conversationId)).provider,
+      ))
     )
       throw new SettingsError(
-        "Conecte sua conta ChatGPT antes de enviar mensagens ou executar tarefas",
+        "Conecte o provider desta conversa antes de enviar mensagens ou executar tarefas",
       );
     this.assertConversationAvailable(conversationId);
     this.store.run(

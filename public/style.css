@@ -594,10 +594,11 @@ p {
   color: var(--muted);
 }
 #conversations {
+  flex: 1 1 0;
   overflow-y: auto;
   scrollbar-width: thin;
   scrollbar-color: var(--line-strong) transparent;
-  min-height: 54px;
+  min-height: 0;
   margin: 0 -2px;
   padding: 2px;
 }
@@ -699,26 +700,6 @@ p {
 .sidebar-bottom {
   margin-top: auto;
   padding-top: 25px;
-}
-.continuity-note {
-  display: flex;
-  gap: 12px;
-  padding: 0 12px 25px;
-  color: var(--muted);
-}
-.continuity-note > .icon {
-  width: 18px;
-  height: 18px;
-  margin-top: 4px;
-}
-.continuity-note p {
-  font-size: 0.74rem;
-  line-height: 1.8;
-  margin: 0;
-}
-.continuity-note strong {
-  font-weight: 400;
-  color: var(--ink);
 }
 .provider-button {
   width: 100%;
@@ -2023,9 +2004,6 @@ dialog .fine {
   .search-field {
     margin-bottom: 23px;
   }
-  .continuity-note {
-    padding-bottom: 18px;
-  }
 }
 @media (max-height: 700px) and (min-width: 761px) {
   .is-empty .welcome-mark {
@@ -2040,9 +2018,6 @@ dialog .fine {
   }
   .sidebar-bottom {
     padding-top: 10px;
-  }
-  .continuity-note {
-    display: none;
   }
   .search-field {
     margin-bottom: 20px;
@@ -3025,9 +3000,6 @@ dialog .fine {
     margin-bottom: 12px;
     padding: 4px 0;
   }
-  .continuity-note {
-    display: none;
-  }
 }
 @media (max-width: 760px) {
   .management-dialog {
@@ -3226,4 +3198,84 @@ dialog .fine {
   :is(.palette-switch, .theme-switch)
   button[aria-pressed="true"] {
   border-color: var(--line-strong);
+}
+
+/* Connection controls belong to Settings; reserve the sidebar for conversation history. */
+.sidebar > :not(#conversations) {
+  flex-shrink: 0;
+}
+.sidebar-bottom {
+  margin-top: 12px;
+  padding-top: 0;
+}
+.connection-fields {
+  display: grid;
+  gap: 18px;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+}
+.provider-card {
+  display: grid;
+  gap: 14px;
+  margin: 0;
+}
+.provider-card-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.provider-card-heading h4 {
+  margin: 0;
+}
+.provider-card .connection-status {
+  font-size: 0.72rem;
+  color: var(--muted);
+  line-height: 1.5;
+}
+.provider-card #provider-status {
+  margin: 0;
+}
+.provider-card .error,
+.provider-card .form-feedback {
+  margin: 0;
+}
+.provider-card .provider-label {
+  font-size: 0.8rem;
+}
+.credential-replacement {
+  align-items: flex-start;
+  font-size: 0.76rem;
+  line-height: 1.6;
+}
+.settings-appearance {
+  display: grid;
+  gap: 18px;
+}
+.settings-appearance .palette-row,
+.settings-appearance .appearance-row {
+  padding: 0;
+  margin: 0;
+  border: 0;
+  font-size: 0.78rem;
+}
+.settings-appearance .language-preference {
+  max-width: 320px;
+}
+@media (max-width: 760px) {
+  .provider-card-heading {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+  }
+  .settings-appearance .palette-row,
+  .settings-appearance .appearance-row {
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+  .settings-appearance .language-preference {
+    max-width: none;
+  }
 }

@@ -15,7 +15,11 @@ test("Pi catalog validates effort, defaults affect only new conversations and pe
   try {
     const first = await app.create();
     const initial = await app.settings.conversation(first);
-    const choice = { modelId: "gpt-5.6-sol", effort: "low" };
+    const choice = {
+      provider: "openai",
+      modelId: "gpt-5.6-sol",
+      effort: "low",
+    };
     assert.ok(
       app.settings
         .catalog()
@@ -64,6 +68,7 @@ test("Pi catalog validates effort, defaults affect only new conversations and pe
     app = await open();
     assert.deepEqual(app.settings.defaults(), choice);
     assert.deepEqual(await app.settings.conversation(first), {
+      provider: "openai",
       modelId: "gpt-6.1-sol",
       effort: "xhigh",
     });
@@ -254,9 +259,11 @@ test("settings endpoints require web session and same origin; MCP discovery expo
     };
     assert.equal(task.delivery, "web");
     assert.deepEqual(
-      await (await request(
-        `/api/tasks/telegram-availability?conversationId=${encodeURIComponent(conversationId)}`,
-      )).json(),
+      await (
+        await request(
+          `/api/tasks/telegram-availability?conversationId=${encodeURIComponent(conversationId)}`,
+        )
+      ).json(),
       { available: false },
     );
     assert.equal(
@@ -274,7 +281,12 @@ test("settings endpoints require web session and same origin; MCP discovery expo
       chatId: "42",
       conversationId,
     };
-    app.store.run("INSERT INTO telegram VALUES (?,?,?)", "42", conversationId, "42");
+    app.store.run(
+      "INSERT INTO telegram VALUES (?,?,?)",
+      "42",
+      conversationId,
+      "42",
+    );
     app.store.run(
       "INSERT INTO telegram_grants VALUES (?,?,?)",
       "42",
@@ -287,9 +299,11 @@ test("settings endpoints require web session and same origin; MCP discovery expo
       JSON.stringify(binding),
     );
     assert.deepEqual(
-      await (await request(
-        `/api/tasks/telegram-availability?conversationId=${encodeURIComponent(conversationId)}`,
-      )).json(),
+      await (
+        await request(
+          `/api/tasks/telegram-availability?conversationId=${encodeURIComponent(conversationId)}`,
+        )
+      ).json(),
       { available: true },
     );
     const deliveryUpdate = await request(`/api/tasks/${task.id}`, "PUT", {

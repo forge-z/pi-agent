@@ -268,99 +268,7 @@
               </svg>
             </button>
           </nav>
-          <div class="continuity-note">
-            <svg class="icon" aria-hidden="true">
-              <use href="/icons.svg#chat-circle" />
-            </svg>
-            <p>Comece aqui.<br /><strong>Continue de onde estiver.</strong></p>
-          </div>
-          <button id="provider-button" class="provider-button">
-            <span class="provider-icon"
-              ><svg class="icon" aria-hidden="true">
-                <use href="/icons.svg#plug" /></svg></span
-            ><span
-              ><span class="provider-label">Conectar ChatGPT</span
-              ><span id="provider-status" class="fine"
-                >Verificando conexão</span
-              ></span
-            ><svg class="icon provider-arrow" aria-hidden="true">
-              <use href="/icons.svg#arrow-up-right" />
-            </svg>
-          </button>
-          <div class="palette-row">
-            <span>Paleta</span>
-            <div
-              class="palette-switch"
-              role="group"
-              aria-label="Paleta de cores"
-            >
-              <button
-                type="button"
-                data-palette-choice="blue"
-                aria-label="Paleta azul"
-                title="Paleta azul"
-                aria-pressed="true"
-              >
-                <span class="palette-swatch" aria-hidden="true"></span
-                >Azul</button
-              ><button
-                type="button"
-                data-palette-choice="gray"
-                aria-label="Paleta cinza"
-                title="Paleta cinza"
-                aria-pressed="false"
-              >
-                <span class="palette-swatch" aria-hidden="true"></span>Cinza
-              </button>
-              <button
-                type="button"
-                data-palette-choice="pi"
-                aria-label="Tema Pi"
-                title="Inspirado no site Pi Coding Agent"
-                aria-pressed="false"
-              >
-                <span class="palette-swatch" aria-hidden="true"></span>Pi
-              </button>
-            </div>
-          </div>
-          <div class="appearance-row">
-            <span>Aparência</span>
-            <div class="theme-switch" role="group" aria-label="Aparência">
-              <button
-                type="button"
-                data-theme-choice="light"
-                aria-label="Tema claro"
-                title="Tema claro"
-                aria-pressed="false"
-              >
-                <svg class="icon" aria-hidden="true">
-                  <use href="/icons.svg#sun" />
-                </svg>
-              </button>
-              <button
-                type="button"
-                data-theme-choice="dark"
-                aria-label="Tema escuro"
-                title="Tema escuro"
-                aria-pressed="false"
-              >
-                <svg class="icon" aria-hidden="true">
-                  <use href="/icons.svg#moon" />
-                </svg>
-              </button>
-              <button
-                type="button"
-                data-theme-choice="auto"
-                aria-label="Tema automático"
-                title="Automático: acompanhar o sistema"
-                aria-pressed="true"
-              >
-                <svg class="icon" aria-hidden="true">
-                  <use href="/icons.svg#monitor" />
-                </svg>
-              </button>
-            </div>
-          </div>
+
           <div class="profile-row">
             <span class="profile-avatar" aria-hidden="true">P</span>
             <div><strong>Meu espaço</strong><span>Pessoal</span></div>
@@ -658,17 +566,193 @@
       <p class="eyebrow">DO SEU JEITO</p>
       <h2 id="settings-title">Seu espaço, ajustado.</h2>
       <p class="management-intro">
-        Escolha como o Pi pensa e quais ferramentas ele pode usar.
+        Gerencie conexões, modelos e aparência do seu espaço.
       </p>
       <p id="settings-error" class="error" role="alert"></p>
       <p id="settings-feedback" class="form-feedback" role="status"></p>
-      <div class="form-field language-preference">
-        <label for="interface-language">Idioma da interface</label>
-        <select id="interface-language">
-          <option value="pt-BR">Português (Brasil)</option>
-          <option value="en">English</option>
-        </select>
-      </div>
+      <section class="management-section" aria-labelledby="connections-title">
+        <div class="section-heading">
+          <span class="section-icon"
+            ><svg class="icon" aria-hidden="true">
+              <use href="/icons.svg#plug" /></svg
+          ></span>
+          <div>
+            <h3 id="connections-title">Conexões</h3>
+            <p>Escolha como acessar os modelos de cada provedor.</p>
+          </div>
+        </div>
+        <fieldset id="provider-connections" class="connection-fields" disabled>
+          <legend class="sr-only">Conexões dos provedores</legend>
+          <article class="management-card provider-card">
+            <div class="provider-card-heading">
+              <h4>OpenAI</h4>
+              <span id="provider-status" class="connection-status" role="status"
+                >Verificando conexão</span
+              >
+            </div>
+            <div class="form-field">
+              <label for="openai-auth-method">Autenticação</label>
+              <select id="openai-auth-method">
+                <option value="oauth">Conta ChatGPT</option>
+                <option value="api_key">Chave API OpenAI</option>
+              </select>
+            </div>
+            <button id="provider-button" class="provider-button">
+              <span class="provider-icon"
+                ><svg class="icon" aria-hidden="true">
+                  <use href="/icons.svg#plug" /></svg></span
+              ><span><span class="provider-label">Conectar ChatGPT</span></span
+              ><svg class="icon provider-arrow" aria-hidden="true">
+                <use href="/icons.svg#arrow-up-right" />
+              </svg>
+            </button>
+            <form
+              id="openai-api-form"
+              class="management-form api-key-form"
+              autocomplete="off"
+              hidden
+            >
+              <div class="form-field">
+                <label for="openai-api-key">Chave API OpenAI</label
+                ><input
+                  id="openai-api-key"
+                  type="password"
+                  autocomplete="off"
+                  autocapitalize="none"
+                  spellcheck="false"
+                  required
+                  aria-describedby="openai-api-hint"
+                /><small id="openai-api-hint"
+                  >O uso da API é cobrado pelo provedor. A chave salva fica no
+                  servidor e não é exibida aqui.</small
+                >
+              </div>
+              <div class="form-actions">
+                <button id="openai-api-save" type="submit">
+                  Salvar chave API
+                </button>
+              </div>
+            </form>
+            <label
+              id="openai-replace-row"
+              class="checkbox-line credential-replacement"
+              hidden
+              ><input
+                id="openai-replace"
+                type="checkbox"
+                form="openai-api-form"
+              /><span id="openai-replace-label"
+                >Confirmo substituir a credencial OpenAI atual.</span
+              ></label
+            >
+            <p id="openai-connection-error" class="error" role="alert"></p>
+            <p
+              id="openai-connection-feedback"
+              class="form-feedback"
+              role="status"
+            ></p>
+          </article>
+          <article class="management-card provider-card">
+            <div class="provider-card-heading">
+              <h4>Anthropic · Claude</h4>
+              <span
+                id="anthropic-status"
+                class="connection-status"
+                role="status"
+                >Verificando conexão</span
+              >
+            </div>
+            <form
+              id="anthropic-api-form"
+              class="management-form api-key-form"
+              autocomplete="off"
+            >
+              <div class="form-field">
+                <label for="anthropic-api-key">Chave API Anthropic</label
+                ><input
+                  id="anthropic-api-key"
+                  type="password"
+                  autocomplete="off"
+                  autocapitalize="none"
+                  spellcheck="false"
+                  required
+                  aria-describedby="anthropic-api-hint"
+                /><small id="anthropic-api-hint"
+                  >Use uma chave API do Anthropic Console. O uso da API é
+                  cobrado pelo provedor; a chave salva não é exibida
+                  aqui.</small
+                >
+              </div>
+              <label
+                id="anthropic-replace-row"
+                class="checkbox-line credential-replacement"
+                hidden
+                ><input id="anthropic-replace" type="checkbox" />Confirmo
+                substituir a chave API Anthropic atual.</label
+              >
+              <div class="form-actions">
+                <button id="anthropic-api-save" type="submit">
+                  Salvar chave API
+                </button>
+              </div>
+            </form>
+            <p id="anthropic-connection-error" class="error" role="alert"></p>
+            <p
+              id="anthropic-connection-feedback"
+              class="form-feedback"
+              role="status"
+            ></p>
+          </article>
+          <article class="management-card provider-card">
+            <div class="provider-card-heading">
+              <h4>DeepSeek</h4>
+              <span id="deepseek-status" class="connection-status" role="status"
+                >Verificando conexão</span
+              >
+            </div>
+            <form
+              id="deepseek-api-form"
+              class="management-form api-key-form"
+              autocomplete="off"
+            >
+              <div class="form-field">
+                <label for="deepseek-api-key">Chave API DeepSeek</label
+                ><input
+                  id="deepseek-api-key"
+                  type="password"
+                  autocomplete="off"
+                  autocapitalize="none"
+                  spellcheck="false"
+                  required
+                  aria-describedby="deepseek-api-hint"
+                /><small id="deepseek-api-hint"
+                  >Use uma chave API da plataforma DeepSeek. O uso da API é
+                  cobrado pelo provedor; a chave salva não é exibida
+                  aqui.</small
+                >
+              </div>
+              <label
+                id="deepseek-replace-row"
+                class="checkbox-line credential-replacement"
+                hidden
+                ><input id="deepseek-replace" type="checkbox" />Confirmo
+                substituir a chave API DeepSeek atual.</label
+              >
+              <div class="form-actions">
+                <button id="deepseek-api-save" type="submit">
+                  Salvar chave API
+                </button>
+              </div>
+            </form>
+            <p id="deepseek-connection-error" class="error" role="alert"></p>
+            <p
+              id="deepseek-connection-feedback"
+              class="form-feedback"
+              role="status"
+            ></p>
+          </article>
+        </fieldset>
+      </section>
       <section class="management-section" aria-labelledby="defaults-title">
         <div class="section-heading">
           <span class="section-icon"
@@ -678,13 +762,15 @@
           <div>
             <h3 id="defaults-title">Novas conversas</h3>
             <p>
-              Estas escolhas serão usadas nas próximas conversas que você criar.
-              A disponibilidade dos modelos do catálogo Pi pode variar conforme
-              sua conta.
+              Escolha o provedor, o modelo e o esforço para novas conversas.
             </p>
           </div>
         </div>
         <form id="defaults-form" class="management-form">
+          <div class="form-field">
+            <label for="default-provider">Provedor</label
+            ><select id="default-provider" required></select>
+          </div>
           <div class="form-grid">
             <div class="form-field">
               <label for="default-model">Modelo</label
@@ -699,6 +785,101 @@
             <button type="submit">Salvar padrão</button>
           </div>
         </form>
+      </section>
+      <section class="management-section" aria-labelledby="appearance-title">
+        <div class="section-heading">
+          <span class="section-icon"
+            ><svg class="icon" aria-hidden="true">
+              <use href="/icons.svg#sun" /></svg
+          ></span>
+          <div>
+            <h3 id="appearance-title">Aparência e idioma</h3>
+            <p>Ajustes deste navegador para deixar o espaço do seu jeito.</p>
+          </div>
+        </div>
+        <div class="settings-appearance">
+          <div class="palette-row">
+            <span>Paleta</span>
+            <div
+              class="palette-switch"
+              role="group"
+              aria-label="Paleta de cores"
+            >
+              <button
+                type="button"
+                data-palette-choice="blue"
+                aria-label="Paleta azul"
+                title="Paleta azul"
+                aria-pressed="true"
+              >
+                <span class="palette-swatch" aria-hidden="true"></span
+                >Azul</button
+              ><button
+                type="button"
+                data-palette-choice="gray"
+                aria-label="Paleta cinza"
+                title="Paleta cinza"
+                aria-pressed="false"
+              >
+                <span class="palette-swatch" aria-hidden="true"></span>Cinza
+              </button>
+              <button
+                type="button"
+                data-palette-choice="pi"
+                aria-label="Tema Pi"
+                title="Inspirado no site Pi Coding Agent"
+                aria-pressed="false"
+              >
+                <span class="palette-swatch" aria-hidden="true"></span>Pi
+              </button>
+            </div>
+          </div>
+          <div class="appearance-row">
+            <span>Aparência</span>
+            <div class="theme-switch" role="group" aria-label="Aparência">
+              <button
+                type="button"
+                data-theme-choice="light"
+                aria-label="Tema claro"
+                title="Tema claro"
+                aria-pressed="false"
+              >
+                <svg class="icon" aria-hidden="true">
+                  <use href="/icons.svg#sun" />
+                </svg>
+              </button>
+              <button
+                type="button"
+                data-theme-choice="dark"
+                aria-label="Tema escuro"
+                title="Tema escuro"
+                aria-pressed="false"
+              >
+                <svg class="icon" aria-hidden="true">
+                  <use href="/icons.svg#moon" />
+                </svg>
+              </button>
+              <button
+                type="button"
+                data-theme-choice="auto"
+                aria-label="Tema automático"
+                title="Automático: acompanhar o sistema"
+                aria-pressed="true"
+              >
+                <svg class="icon" aria-hidden="true">
+                  <use href="/icons.svg#monitor" />
+                </svg>
+              </button>
+            </div>
+          </div>
+          <div class="form-field language-preference">
+            <label for="interface-language">Idioma da interface</label>
+            <select id="interface-language">
+              <option value="pt-BR">Português (Brasil)</option>
+              <option value="en">English</option>
+            </select>
+          </div>
+        </div>
       </section>
       <section class="management-section" aria-labelledby="mcp-title">
         <div class="section-heading">
@@ -878,6 +1059,10 @@
         novas conversas, abra Configurações.
       </p>
       <form id="conversation-settings-form" class="management-form">
+        <div class="form-field">
+          <label for="conversation-provider">Provedor</label
+          ><select id="conversation-provider" required></select>
+        </div>
         <div class="form-field">
           <label for="conversation-model">Modelo</label
           ><select id="conversation-model" required></select>

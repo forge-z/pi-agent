@@ -140,6 +140,11 @@ async function api(path, method = "GET", data) {
 }
 function showLogin() {
   events?.close();
+  clearInterval(providerPoll);
+  providerPoll = null;
+  providerFlow = null;
+  promptId = null;
+  $("auth-value").value = "";
   rendered = null;
   lastSnapshot = null;
   historyNodes.clear();
@@ -668,21 +673,7 @@ async function refreshStatus() {
   text($("model-label"), () =>
     status.mode === "demo" ? t("Demonstração") : status.model,
   );
-  text($("provider-status"), () =>
-    status.credentials
-      ? t("Conta conectada")
-      : status.mode === "demo"
-        ? t("Modo demonstração")
-        : t("Use sua conta para começar"),
-  );
-  text(document.querySelector(".provider-label"), () =>
-    status.mode === "demo"
-      ? "ChatGPT"
-      : status.credentials
-        ? t("ChatGPT conectado")
-        : t("Conectar ChatGPT"),
-  );
-  $("provider-button").disabled = status.mode === "demo";
+  settingsUI.updateProviders?.(status.providers || []);
   settingsUI.refreshLabel();
 }
 async function workspace() {
@@ -1394,8 +1385,8 @@ $("message-form").onsubmit = guard(async (event) => {
     $("send").disabled = false;
   }
 });
-$("provider-button").onclick = guard(async () => {
-  const flow = await api("/api/provider/login", "POST", {});
+async function connectProvider(payload) {
+  const flow = await api("/api/provider/login", "POST", payload);
   providerFlow = flow.id;
   $("provider-dialog").showModal();
   const poll = async () => {
@@ -1429,11 +1420,12 @@ $("provider-button").onclick = guard(async () => {
       clearInterval(providerPoll);
       providerPoll = null;
       await refreshStatus();
+      await settingsUI.load();
     }
   };
   providerPoll = setInterval(() => guard(poll)(), 1000);
   await poll();
-});
+}
 $("auth-form").onsubmit = guard(async (event) => {
   event.preventDefault();
   await api(`/api/provider/login/${providerFlow}`, "POST", {
@@ -1451,10 +1443,15 @@ async function cancelAuth() {
 }
 $("cancel-auth").onclick = guard(async () => {
   await cancelAuth();
+  $("auth-value").value = "";
   $("provider-dialog").close();
 });
 $("provider-dialog").addEventListener("cancel", () => {
+  $("auth-value").value = "";
   void guard(cancelAuth)();
+});
+$("provider-dialog").addEventListener("close", () => {
+  $("auth-value").value = "";
 });
 document.querySelectorAll("[data-prompt]").forEach((button) => {
   button.onclick = () => {
@@ -1506,6 +1503,7 @@ const settingsUI = configureUI(api, {
   icon,
   node,
   closeSidebar: () => sidebar(false, false),
+  connectProvider,
   getConversationId: () => conversationId,
   getConversations: () => conversationsCache,
   loadConversations,

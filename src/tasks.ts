@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { CronExpressionParser } from "cron-parser";
-import type { Runtime } from "./runtime.js";
+import { ConversationBusyError, type Runtime } from "./runtime.js";
 import { queueTaskTelegram, taskTelegramAvailable } from "./task-telegram.js";
 
 export type TaskDelivery = "legacy" | "web" | "web_telegram";
@@ -429,6 +429,8 @@ export class Tasks {
     if (this.ticking) return this.ticking;
     this.ticking = this.serialize(async () => {
       this.refresh();
+      // Authentication changes delay admission; do not consume an occurrence.
+      if (this.runtime.store.credentialMutation) return;
       const now = this.clock();
       for (const task of this.runtime.store.all<TaskRow>(
         "SELECT * FROM tasks WHERE deleted=0 AND enabled=1 AND nextRun<=? AND conversationId NOT IN (SELECT conversationId FROM conversation_lifecycle WHERE deletedAt IS NOT NULL) ORDER BY nextRun",
@@ -563,6 +565,9 @@ export class Tasks {
       "SELECT r.*,t.conversationId,t.prompt FROM task_runs r JOIN tasks t ON t.id=r.taskId WHERE r.state='pending' ORDER BY r.rowid",
     )) {
       if (this.admitted.has(run.id)) continue;
+      // A login may start between two awaited admissions. Keep unsent runs
+      // pending with the same requestId so a later tick can admit them once.
+      if (store.credentialMutation) return;
       try {
         // Replayed after a crash with the SAME requestId; Runtime/Pi deduplicate admission.
         await this.runtime.submit(
@@ -574,6 +579,9 @@ export class Tasks {
         );
         this.admitted.add(run.id);
       } catch (cause) {
+        // Model settings and archive reservations can temporarily block the
+        // conversation before admission. Retry this unsent run on the next tick.
+        if (cause instanceof ConversationBusyError) continue;
         const error = cause instanceof Error ? cause.message : String(cause);
         store.run("UPDATE tasks SET lastError=? WHERE id=?", error, run.taskId);
         const request = store.get(

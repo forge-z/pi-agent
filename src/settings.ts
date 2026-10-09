@@ -3,56 +3,108 @@ import {
   clampThinkingLevel,
   getSupportedThinkingLevels,
 } from "@earendil-works/pi-ai/models";
-import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
+import type { Credential, ModelThinkingLevel } from "@earendil-works/pi-ai";
 import type { Runtime } from "./runtime.js";
 import { McpGateway, type McpConfig } from "./mcp.js";
 
 export interface ModelSettings {
+  provider: string;
   modelId: string;
   effort: ModelThinkingLevel;
 }
 export class SettingsError extends Error {}
 export class Settings {
   constructor(private app: Runtime) {}
-  get provider() {
+  private get initialProvider() {
     return (
       this.app.options.provider ??
       (this.app.options.mode === "live" ? "openai" : "faux")
     );
   }
-  defaults(): ModelSettings {
+  private get defaultsKey() {
+    return `model-defaults-selection:${this.app.options.mode ?? "demo"}`;
+  }
+  get provider() {
+    return this.defaults().provider;
+  }
+  private credential(provider: string): Credential | undefined {
     const row = this.app.store.get<{ value: string }>(
-      "SELECT value FROM meta WHERE key=?",
-      `model-defaults:${this.provider}`,
+      "SELECT value FROM credentials WHERE provider=?",
+      provider,
     );
+    return row ? (JSON.parse(row.value) as Credential) : undefined;
+  }
+  defaults(): ModelSettings {
+    const row =
+      this.app.store.get<{ value: string }>(
+        "SELECT value FROM meta WHERE key=?",
+        this.defaultsKey,
+      ) ??
+      this.app.store.get<{ value: string }>(
+        "SELECT value FROM meta WHERE key=?",
+        `model-defaults:${this.initialProvider}`,
+      );
     if (row) {
       try {
-        return this.validate(JSON.parse(row.value) as Record<string, unknown>);
+        return this.validate(
+          JSON.parse(row.value) as Record<string, unknown>,
+          this.initialProvider,
+        );
       } catch {
         /* A removed catalog entry must not break all new conversations. */
       }
     }
+    const provider = this.initialProvider;
     const modelId =
       this.app.options.modelId ??
       (this.app.options.mode === "live" ? "gpt-6.1-sol" : "faux-1");
-    const model = this.app.models.getModel(this.provider, modelId);
+    const model = this.app.models.getModel(provider, modelId);
     return {
+      provider,
       modelId,
       effort: model ? clampThinkingLevel(model, "high") : "high",
     };
   }
-  catalog() {
-    return this.app.models.getModels(this.provider).map((model) => ({
+  catalog(provider = this.provider) {
+    const registered = this.app.models.getProvider(provider);
+    const models = this.app.models.getModels(provider);
+    return (
+      registered?.filterModels?.(models, this.credential(provider)) ?? models
+    ).map((model) => ({
+      provider: model.provider,
       id: model.id,
       name: model.name,
       efforts: getSupportedThinkingLevels(model),
     }));
   }
-  validate(value: Record<string, unknown>): ModelSettings {
-    if (typeof value.modelId !== "string" || typeof value.effort !== "string")
-      throw new SettingsError("Escolha modelo e esforço");
-    const model = this.app.models.getModel(this.provider, value.modelId);
-    if (!model)
+  providers() {
+    return this.app.models.getProviders().map((provider) => ({
+      id: provider.id,
+      name: provider.name,
+      authTypes: [
+        ...(provider.auth.oauth?.login ? ["oauth"] : []),
+        ...(provider.auth.apiKey?.login ? ["api_key"] : []),
+      ],
+      credentialType: this.credential(provider.id)?.type ?? null,
+      models: this.catalog(provider.id),
+    }));
+  }
+  validate(
+    value: Record<string, unknown>,
+    fallbackProvider = this.provider,
+  ): ModelSettings {
+    const provider = value.provider ?? fallbackProvider;
+    if (
+      typeof provider !== "string" ||
+      typeof value.modelId !== "string" ||
+      typeof value.effort !== "string"
+    )
+      throw new SettingsError("Escolha provider, modelo e esforço");
+    const model = this.app.models.getModel(provider, value.modelId);
+    if (
+      !model ||
+      !this.catalog(provider).some((entry) => entry.id === value.modelId)
+    )
       throw new SettingsError("Modelo não disponível no catálogo do Pi");
     if (
       !getSupportedThinkingLevels(model).includes(
@@ -61,6 +113,7 @@ export class Settings {
     )
       throw new SettingsError("Esforço não suportado por este modelo");
     return {
+      provider,
       modelId: value.modelId,
       effort: value.effort as ModelThinkingLevel,
     };
@@ -69,7 +122,7 @@ export class Settings {
     const settings = this.validate(value);
     this.app.store.run(
       "INSERT INTO meta VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-      `model-defaults:${this.provider}`,
+      this.defaultsKey,
       JSON.stringify(settings),
     );
     return settings;
@@ -77,35 +130,40 @@ export class Settings {
   async conversation(id: string): Promise<ModelSettings> {
     const agent = await (await this.app.conversation(id)).agent(context);
     return {
+      provider: agent.model?.provider ?? this.defaults().provider,
       modelId: agent.model?.modelId ?? this.defaults().modelId,
       effort: agent.thinkingLevel,
     };
   }
   async saveConversation(id: string, value: Record<string, unknown>) {
-    const settings = this.validate(value);
-    const conversation = await this.app.conversation(id);
-    const active = await this.app.harness.inspect(context);
-    if (
-      active.tasks.some(
-        ({ record }) =>
-          String(record.conversationId) === id && !record.background,
-      ) ||
-      this.app.store.get(
-        "SELECT 1 FROM requests WHERE conversationId=? AND status='pending'",
-        id,
-      )
-    )
-      throw new SettingsError(
-        "Aguarde a conversa concluir antes de mudar modelo e esforço",
+    return this.app.withConversationSettings(id, async (conversation) => {
+      const agent = await conversation.agent(context);
+      const settings = this.validate(
+        value,
+        agent.model?.provider ?? this.provider,
       );
-    await conversation.configure(
-      {
-        model: { provider: this.provider, modelId: settings.modelId },
-        thinkingLevel: settings.effort,
-      },
-      context,
-    );
-    return settings;
+      const active = await this.app.harness.inspect(context);
+      if (
+        active.tasks.some(
+          ({ record }) => String(record.conversationId) === id,
+        ) ||
+        this.app.store.get(
+          "SELECT 1 FROM requests WHERE conversationId=? AND status='pending'",
+          id,
+        )
+      )
+        throw new SettingsError(
+          "Aguarde a conversa concluir antes de mudar provider, modelo e esforço",
+        );
+      await conversation.configure(
+        {
+          model: { provider: settings.provider, modelId: settings.modelId },
+          thinkingLevel: settings.effort,
+        },
+        context,
+      );
+      return settings;
+    });
   }
   private gateway() {
     if (!(this.app.options.gateway instanceof McpGateway))
@@ -243,6 +301,7 @@ export class Settings {
       mode: this.app.options.mode ?? "demo",
       ...this.defaults(),
       models: this.catalog(),
+      providers: this.providers(),
       mcp: this.mcp(),
       mcpStatus: this.app.mcpStatus,
     };

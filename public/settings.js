@@ -147,9 +147,36 @@ export function configureUI(api, callbacks) {
     element.value = value;
     return element;
   }
+  let connectionProviders = [];
+  let connectionBusy = false;
+  let connectionGeneration = 0;
+
+  function availableProviders() {
+    return (
+      settings?.providers || [
+        {
+          id: settings?.provider || "openai",
+          name: "OpenAI",
+          models: settings?.models || [],
+          authTypes: [],
+          credentialType: null,
+        },
+      ]
+    );
+  }
+  function modelsFor(provider) {
+    return (
+      availableProviders().find((entry) => entry.id === provider)?.models || []
+    );
+  }
+  function providerControl(modelId) {
+    return modelId === "default-model"
+      ? "default-provider"
+      : "conversation-provider";
+  }
   function populateEfforts(modelId, effortId, preferred) {
     const select = $(effortId);
-    const model = settings.models.find(
+    const model = modelsFor($(providerControl(modelId)).value).find(
       (entry) => entry.id === $(modelId).value,
     );
     const efforts = model?.efforts || [];
@@ -164,36 +191,232 @@ export function configureUI(api, callbacks) {
   }
   function populateModels(modelId, effortId, preferred = settings) {
     const select = $(modelId);
+    const models = modelsFor($(providerControl(modelId)).value);
     select.replaceChildren(
-      ...settings.models.map((model) =>
-        option(model.id, model.name || model.id),
-      ),
+      ...models.map((model) => option(model.id, model.name || model.id)),
     );
-    if (settings.models.some((model) => model.id === preferred?.modelId))
+    if (models.some((model) => model.id === preferred?.modelId))
       select.value = preferred.modelId;
-    select.disabled = !settings.models.length;
+    select.disabled = !models.length;
     populateEfforts(modelId, effortId, preferred?.effort);
+  }
+  function populateProviders(
+    providerId,
+    modelId,
+    effortId,
+    preferred = settings,
+  ) {
+    const select = $(providerId);
+    const providers = availableProviders();
+    const provider =
+      preferred?.provider || settings?.provider || providers[0]?.id;
+    select.replaceChildren(
+      ...providers.map((entry) => option(entry.id, entry.name || entry.id)),
+    );
+    // A conversation may still use a provider that is unavailable in the current catalog.
+    if (provider && !providers.some((entry) => entry.id === provider))
+      select.append(option(provider, provider));
+    if (provider) select.value = provider;
+    select.disabled = !providers.length;
+    populateModels(modelId, effortId, preferred);
   }
   function updateLabel() {
     if (!currentSettings) return;
-    const model = settings?.models.find(
+    const provider = currentSettings.provider || settings?.provider || "openai";
+    const model = modelsFor(provider).find(
       (entry) => entry.id === currentSettings.modelId,
     );
+    const current = { ...currentSettings };
     text(
       $("model-label"),
       () =>
-        `${model?.name || currentSettings.modelId} · ${t(effortNames[currentSettings.effort] || currentSettings.effort)}`,
+        `${model?.name || current.modelId} · ${t(effortNames[current.effort] || current.effort)}`,
     );
     attr($("model-label"), "aria-label", () =>
       t("Ajustar modelo desta conversa: {0}", [$("model-label").textContent]),
     );
   }
+  function clearConnectionInputs() {
+    for (const provider of ["openai", "anthropic", "deepseek"]) {
+      $(`${provider}-api-key`).value = "";
+      $(`${provider}-api-key`).setCustomValidity("");
+      $(`${provider}-replace`).checked = false;
+    }
+  }
+  function connectionProvider(provider) {
+    return connectionProviders.find((entry) => entry.id === provider);
+  }
+  function updateOpenAIMethod() {
+    const method = $("openai-auth-method").value;
+    const provider = connectionProvider("openai");
+    const available = provider?.authTypes?.includes(method) === true;
+    $("provider-button").hidden = method !== "oauth";
+    $("openai-api-form").hidden = method !== "api_key";
+    $("provider-button").disabled = connectionBusy || !available;
+    $("openai-api-key").disabled = connectionBusy || !available;
+    $("openai-api-save").disabled = connectionBusy || !available;
+    text($("openai-replace-label"), () => {
+      if (provider?.credentialType === "oauth")
+        return method === "api_key"
+          ? t(
+              "Confirmo substituir minha conexão ChatGPT por esta chave API OpenAI.",
+            )
+          : t("Confirmo substituir a conexão ChatGPT atual.");
+      return method === "oauth"
+        ? t(
+            "Confirmo substituir a chave API OpenAI atual por uma conexão ChatGPT.",
+          )
+        : t("Confirmo substituir a chave API OpenAI atual.");
+    });
+  }
+  function renderProviderConnections(providers = availableProviders()) {
+    connectionProviders = providers;
+    clearConnectionInputs();
+    $("provider-connections").disabled = connectionBusy || !settings;
+    for (const id of ["openai", "anthropic", "deepseek"]) {
+      const provider = connectionProvider(id);
+      const credentialType = provider?.credentialType;
+      const statusId = id === "openai" ? "provider-status" : `${id}-status`;
+      text($(statusId), () =>
+        !provider || !provider.authTypes?.length
+          ? t("Conexão indisponível neste ambiente.")
+          : credentialType === "api_key"
+            ? t("Chave API configurada")
+            : credentialType === "oauth"
+              ? t("Conta ChatGPT conectada")
+              : t("Não configurado"),
+      );
+      $(`${id}-replace-row`).hidden = !credentialType;
+      $(`${id}-replace`).required = Boolean(credentialType);
+      $(`${id}-replace`).checked = false;
+      $(`${id}-replace`).disabled = connectionBusy;
+    }
+    const openai = connectionProvider("openai");
+    $("openai-auth-method").value = openai?.credentialType || "oauth";
+    $("openai-auth-method").disabled =
+      connectionBusy || !openai?.authTypes?.length;
+    for (const entry of $("openai-auth-method").options)
+      entry.disabled = !openai?.authTypes?.includes(entry.value);
+    text(document.querySelector(".provider-label"), () =>
+      openai?.credentialType === "oauth"
+        ? t("Conectar novamente com ChatGPT")
+        : t("Conectar ChatGPT"),
+    );
+    updateOpenAIMethod();
+    for (const id of ["anthropic", "deepseek"]) {
+      const available =
+        connectionProvider(id)?.authTypes?.includes("api_key") === true;
+      $(`${id}-api-key`).disabled = connectionBusy || !available;
+      $(`${id}-api-save`).disabled = connectionBusy || !available;
+    }
+  }
   async function loadSettings() {
     settings = await api("/api/settings");
     servers = settings.mcp || (await api("/api/mcp"));
     mcpStatus = settings.mcpStatus || [];
+    renderProviderConnections();
+    if (
+      $("settings-dialog").open &&
+      !$("defaults-form").hidden &&
+      $("default-provider").value
+    )
+      populateProviders("default-provider", "default-model", "default-effort", {
+        provider: $("default-provider").value,
+        modelId: $("default-model").value,
+        effort: $("default-effort").value,
+      });
     updateLabel();
   }
+  function setConnectionBusy(value) {
+    connectionBusy = value;
+    $("provider-connections").disabled = value || !settings;
+  }
+  async function saveApiKey(id, event) {
+    event.preventDefault();
+    if (connectionBusy) return;
+    const form = $(`${id}-api-form`);
+    const input = $(`${id}-api-key`);
+    if (!form.checkValidity()) {
+      form.reportValidity();
+      return;
+    }
+    const apiKey = input.value.trim();
+    if (!apiKey) {
+      input.setCustomValidity(t("Informe uma chave API."));
+      input.reportValidity();
+      return;
+    }
+    const replace = $(`${id}-replace`).required && $(`${id}-replace`).checked;
+    input.value = "";
+    const generation = connectionGeneration;
+    feedback(`${id}-connection-error`);
+    feedback(`${id}-connection-feedback`);
+    setConnectionBusy(true);
+    try {
+      await api(`/api/provider/${id}/api-key`, "PUT", {
+        apiKey,
+        ...(replace ? { replace: true } : {}),
+      });
+      if (generation !== connectionGeneration) return;
+      await loadSettings();
+      await callbacks.refreshStatus();
+      feedback(`${id}-connection-feedback`, () =>
+        t("Chave API salva no servidor."),
+      );
+    } catch {
+      if (generation === connectionGeneration)
+        feedback(`${id}-connection-error`, () =>
+          t("Não foi possível salvar a conexão. Tente novamente."),
+        );
+    } finally {
+      input.value = "";
+      setConnectionBusy(false);
+      if (settings) renderProviderConnections();
+    }
+  }
+  for (const provider of ["openai", "anthropic", "deepseek"]) {
+    $(`${provider}-api-form`).onsubmit = (event) =>
+      void saveApiKey(provider, event);
+    $(`${provider}-api-key`).addEventListener("input", () =>
+      $(`${provider}-api-key`).setCustomValidity(""),
+    );
+  }
+  $("openai-auth-method").onchange = () => {
+    clearConnectionInputs();
+    feedback("openai-connection-error");
+    feedback("openai-connection-feedback");
+    updateOpenAIMethod();
+  };
+  $("provider-button").onclick = async () => {
+    if (connectionBusy || $("provider-button").disabled) return;
+    const replacement = $("openai-replace");
+    if (!replacement.checkValidity()) {
+      replacement.reportValidity();
+      return;
+    }
+    const replace = replacement.required && replacement.checked;
+    clearConnectionInputs();
+    feedback("openai-connection-error");
+    setConnectionBusy(true);
+    try {
+      await callbacks.connectProvider({
+        provider: "openai",
+        type: "oauth",
+        ...(replace ? { replace: true } : {}),
+      });
+    } catch {
+      feedback("openai-connection-error", () =>
+        t("Não foi possível iniciar a conexão. Tente novamente."),
+      );
+    } finally {
+      setConnectionBusy(false);
+      renderProviderConnections(connectionProviders);
+    }
+  };
+  $("settings-dialog").addEventListener("close", () => {
+    connectionGeneration++;
+    clearConnectionInputs();
+  });
   function show(dialogId) {
     callbacks.closeSidebar();
     feedback("settings-error");
@@ -201,19 +424,25 @@ export function configureUI(api, callbacks) {
     $(dialogId).showModal();
   }
   $("settings-button").onclick = () => {
+    clearConnectionInputs();
     show("settings-dialog");
+    $("provider-connections").disabled = true;
     feedback("settings-feedback", () => t("Carregando suas configurações…"));
     $("defaults-form").hidden = true;
     $("mcp-add").disabled = true;
     void act("settings-error", [], async () => {
       await loadSettings();
-      populateModels("default-model", "default-effort");
+      populateProviders("default-provider", "default-model", "default-effort");
       renderServers();
       $("defaults-form").hidden = false;
       $("mcp-add").disabled = false;
       feedback("settings-feedback");
     });
   };
+  $("default-provider").onchange = () =>
+    populateModels("default-model", "default-effort", {});
+  $("conversation-provider").onchange = () =>
+    populateModels("conversation-model", "conversation-effort", {});
   $("default-model").onchange = () =>
     populateEfforts(
       "default-model",
@@ -230,6 +459,7 @@ export function configureUI(api, callbacks) {
     event.preventDefault();
     void act("settings-error", [event.submitter], async () => {
       await api("/api/settings", "PUT", {
+        provider: $("default-provider").value,
         modelId: $("default-model").value,
         effort: $("default-effort").value,
       });
@@ -248,7 +478,8 @@ export function configureUI(api, callbacks) {
     feedback("conversation-settings-error");
     void act("conversation-settings-error", [], async () => {
       await loadSettings();
-      populateModels(
+      populateProviders(
+        "conversation-provider",
         "conversation-model",
         "conversation-effort",
         currentSettings || settings,
@@ -264,6 +495,7 @@ export function configureUI(api, callbacks) {
         `/api/conversations/${encodeURIComponent(conversationTarget)}/settings`,
         "PUT",
         {
+          provider: $("conversation-provider").value,
           modelId: $("conversation-model").value,
           effort: $("conversation-effort").value,
         },
@@ -1182,11 +1414,16 @@ export function configureUI(api, callbacks) {
   return {
     load: loadSettings,
     refreshLabel: updateLabel,
+    updateProviders: renderProviderConnections,
     updateConversation(value) {
       currentSettings = value;
       updateLabel();
     },
     reset() {
+      connectionGeneration++;
+      clearConnectionInputs();
+      connectionProviders = [];
+      $("provider-connections").disabled = true;
       settings = null;
       currentSettings = null;
       servers = [];
