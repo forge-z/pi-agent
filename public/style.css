@@ -864,8 +864,16 @@ main {
   width: 18px;
   height: 18px;
 }
-#tool-visibility-button {
+#tool-visibility-button,
+#telegram-button {
+  width: 120px;
+  height: 44px;
   min-height: 44px;
+  flex: none;
+  padding: 9px 11px;
+  gap: 8px;
+  line-height: 1;
+  white-space: nowrap;
 }
 #tool-visibility-button[aria-pressed="true"] {
   background: var(--accent-soft);
@@ -2175,7 +2183,7 @@ dialog .fine {
     font-size: 0.5rem;
   }
   .header-actions {
-    gap: 0;
+    gap: 8px;
   }
   .connection {
     font-size: 0;

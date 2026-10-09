@@ -5,7 +5,14 @@ import type {
   CallToolResult,
 } from "@modelcontextprotocol/sdk/types.js";
 import { AjvJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/ajv";
-import { McpGateway, McpError, McpNotSentError, PolicyError } from "./mcp.js";
+import {
+  McpGateway,
+  McpError,
+  McpNotSentError,
+  McpUrlElicitationRequiredError,
+  validateMcpUrlElicitation,
+  PolicyError,
+} from "./mcp.js";
 import type { Store } from "./store.js";
 
 export interface McpCall {
@@ -32,6 +39,7 @@ export interface McpInteraction {
 const object = (value: unknown): value is Record<string, unknown> =>
   !!value && typeof value === "object" && !Array.isArray(value);
 export class McpCalls {
+  private tails = new Map<string, Promise<unknown>>();
   private waiters = new Map<string, (value: ElicitResult) => void>();
   private controllers = new Set<AbortController>();
   private inflight = new Set<Promise<CallToolResult>>();
@@ -43,7 +51,8 @@ export class McpCalls {
     store.db
       .exec(`CREATE TABLE IF NOT EXISTS mcp_calls(id TEXT PRIMARY KEY, conversationId TEXT NOT NULL, server TEXT NOT NULL, tool TEXT NOT NULL, args TEXT NOT NULL, state TEXT NOT NULL, result TEXT, binding TEXT NOT NULL, updatedAt INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS mcp_interactions(id TEXT PRIMARY KEY, callId TEXT NOT NULL, conversationId TEXT NOT NULL, server TEXT NOT NULL, kind TEXT NOT NULL, payload TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'pending', response TEXT);
-      UPDATE mcp_interactions SET state='expired' WHERE state='pending' AND kind!='resume';
+      UPDATE mcp_interactions SET state='expired' WHERE state='pending' AND kind!='resume'
+        AND NOT (kind='url' AND json_valid(payload) AND json_extract(payload,'$.source')='url_required_error');
       UPDATE mcp_calls SET state='uncertain' WHERE state='running';`);
   }
   list(conversationId: string) {
@@ -67,7 +76,34 @@ export class McpCalls {
       conversationId,
     );
   }
-  async execute(
+  private serialize<T>(conversationId: string, operation: () => Promise<T>) {
+    const pending = (this.tails.get(conversationId) ?? Promise.resolve())
+      .catch(() => {})
+      .then(operation);
+    this.tails.set(conversationId, pending);
+    void pending
+      .finally(() => {
+        if (this.tails.get(conversationId) === pending)
+          this.tails.delete(conversationId);
+      })
+      .catch(() => {});
+    return pending;
+  }
+  execute(
+    conversationId: string,
+    taskId: number,
+    server: string,
+    tool: string,
+    args: Record<string, unknown>,
+    signal?: AbortSignal,
+  ) {
+    // Keep the ledger outcome and all elicitation cards committed before a
+    // queued operation rechecks admission. The transport queue alone ends earlier.
+    return this.serialize(conversationId, () =>
+      this.executeOnce(conversationId, taskId, server, tool, args, signal),
+    );
+  }
+  private async executeOnce(
     conversationId: string,
     taskId: number,
     server: string,
@@ -76,6 +112,8 @@ export class McpCalls {
     signal?: AbortSignal,
   ) {
     if (this.closed) throw new PolicyError("Aplicação encerrando");
+    if (signal?.aborted)
+      throw new McpNotSentError("Chamada MCP cancelada antes do envio.");
     this.gateway.assertDirect(server, tool);
     const id = createHash("sha256")
       .update(`mcp:${conversationId}:${taskId}`)
@@ -102,7 +140,7 @@ export class McpCalls {
       );
     }
     if (this.pending(conversationId))
-      throw new PolicyError(
+      throw new McpNotSentError(
         "Responda à solicitação pendente do servidor MCP antes de continuar",
       );
     if (
@@ -112,8 +150,17 @@ export class McpCalls {
         server,
       )
     )
-      throw new PolicyError(
+      throw new McpNotSentError(
         "Verifique e registre o resultado MCP incerto antes de executar outra chamada neste servidor",
+      );
+    if (
+      this.store.get(
+        "SELECT 1 FROM mcp_calls WHERE conversationId=? AND state IN ('running','paused')",
+        conversationId,
+      )
+    )
+      throw new McpNotSentError(
+        "Aguarde a chamada ou retomada MCP em andamento; nenhuma nova ferramenta foi enviada",
       );
     // Executor's resume tool is deliberately not an agent-side approval bypass.
     if (tool === "resume" && typeof args.executionId === "string")
@@ -121,6 +168,9 @@ export class McpCalls {
         "Retomadas com decisão de permissão devem usar a solicitação do servidor exibida na conversa",
       );
     const binding = await this.gateway.connectionBinding(server);
+    if (this.closed) throw new PolicyError("Aplicação encerrando");
+    if (signal?.aborted)
+      throw new McpNotSentError("Chamada MCP cancelada antes do envio.");
     this.store.run(
       "INSERT INTO mcp_calls VALUES (?,?,?,?,?,'running',NULL,?,?)",
       id,
@@ -160,6 +210,10 @@ export class McpCalls {
       ? AbortSignal.any([controller.signal, signal])
       : controller.signal;
     try {
+      if (this.closed)
+        throw new McpNotSentError(
+          "Aplicação encerrando; nenhuma chamada MCP foi enviada",
+        );
       const result = await this.gateway.callDirect(call.server, tool, args, {
         signal: combined,
         binding: call.binding,
@@ -227,15 +281,48 @@ export class McpCalls {
           },
         ],
       };
-      this.store.run(
-        "UPDATE mcp_calls SET state=?,result=?,updatedAt=? WHERE id=?",
-        error instanceof PolicyError || error instanceof McpNotSentError
-          ? "failed"
-          : "uncertain",
-        JSON.stringify(result),
-        Date.now(),
-        id,
-      );
+      this.store.db.exec("BEGIN IMMEDIATE");
+      try {
+        if (error instanceof McpUrlElicitationRequiredError)
+          for (const params of error.elicitations)
+            this.store.run(
+              "INSERT INTO mcp_interactions VALUES (?,?,?,?,?,?,'pending',NULL)",
+              randomUUID(),
+              id,
+              call.conversationId,
+              call.server,
+              "url",
+              JSON.stringify({ ...params, source: "url_required_error" }),
+            );
+        this.store.run(
+          "UPDATE mcp_calls SET state=?,result=?,updatedAt=? WHERE id=?",
+          error instanceof PolicyError || error instanceof McpNotSentError
+            ? "failed"
+            : "uncertain",
+          JSON.stringify(result),
+          Date.now(),
+          id,
+        );
+        this.store.db.exec("COMMIT");
+      } catch (storageError) {
+        this.store.db.exec("ROLLBACK");
+        // A failed card publication must still block replay of the dispatched call.
+        this.store.run(
+          "UPDATE mcp_calls SET state='uncertain',result=?,updatedAt=? WHERE id=?",
+          JSON.stringify({
+            isError: true,
+            content: [
+              {
+                type: "text",
+                text: "Não foi possível salvar as solicitações MCP. Verifique o resultado da chamada no serviço; ela não será repetida automaticamente.",
+              },
+            ],
+          }),
+          Date.now(),
+          id,
+        );
+        throw storageError;
+      }
       throw error;
     } finally {
       // SDK may finish a tools/call while a withdrawn elicitation handler is still pending.
@@ -243,7 +330,7 @@ export class McpCalls {
       controller.abort();
       this.controllers.delete(controller);
       this.store.run(
-        "UPDATE mcp_interactions SET state='expired' WHERE callId=? AND kind!='resume' AND state='pending'",
+        "UPDATE mcp_interactions SET state='expired' WHERE callId=? AND kind!='resume' AND state='pending' AND NOT (kind='url' AND json_valid(payload) AND json_extract(payload,'$.source')='url_required_error')",
         id,
       );
     }
@@ -305,13 +392,10 @@ export class McpCalls {
   ): Promise<ElicitResult> {
     signal.throwIfAborted();
     const kind = params.mode === "url" ? "url" : "form";
-    if (kind === "url") {
-      const url = new URL("url" in params ? params.url : "");
-      if (url.protocol !== "https:" || url.username || url.password)
-        throw new PolicyError(
-          "Servidor MCP solicitou um endereço de interação inválido",
-        );
-    }
+    const payload =
+      kind === "url"
+        ? validateMcpUrlElicitation(params)
+        : { ...params, source: undefined };
     const id = randomUUID();
     this.store.run(
       "INSERT INTO mcp_interactions VALUES (?,?,?,?,?,?,'pending',NULL)",
@@ -320,7 +404,7 @@ export class McpCalls {
       call.conversationId,
       call.server,
       kind,
-      JSON.stringify(params),
+      JSON.stringify(payload),
     );
     return new Promise<ElicitResult>((resolve) => {
       const finish = (value: ElicitResult) => {
@@ -346,6 +430,7 @@ export class McpCalls {
     action: "accept" | "decline" | "cancel",
     content?: Record<string, unknown>,
   ) {
+    if (this.closed) throw new PolicyError("Aplicação encerrando");
     if (!["accept", "decline", "cancel"].includes(action))
       throw new PolicyError("Decisão MCP inválida");
     const interaction = this.store.get<McpInteraction>(
@@ -356,6 +441,8 @@ export class McpCalls {
     if (!interaction) throw new PolicyError("Solicitação MCP não encontrada");
     if (interaction.state !== "pending") return interaction;
     const payload = JSON.parse(interaction.payload) as Record<string, unknown>;
+    const urlRequired =
+      interaction.kind === "url" && payload.source === "url_required_error";
     if (interaction.kind === "form" && action === "accept") {
       if (!object(payload.requestedSchema))
         throw new PolicyError("Formulário MCP inválido");
@@ -366,7 +453,7 @@ export class McpCalls {
         throw new PolicyError("Preencha os campos exigidos pelo servidor MCP");
     }
     const waiter = this.waiters.get(id);
-    if (interaction.kind !== "resume" && !waiter)
+    if (interaction.kind !== "resume" && !urlRequired && !waiter)
       throw new PolicyError(
         "Esta solicitação MCP expirou; ela não pode ser aceita após reinício",
       );
@@ -399,7 +486,9 @@ export class McpCalls {
     }
     const response: ElicitResult = {
       action,
-      ...(content ? { content: content as ElicitResult["content"] } : {}),
+      ...(!urlRequired && content
+        ? { content: content as ElicitResult["content"] }
+        : {}),
     };
     this.store.db.exec("BEGIN IMMEDIATE");
     let claimed: number | bigint;
@@ -426,13 +515,15 @@ export class McpCalls {
         id,
       )!;
     if (waiter) waiter(response);
-    else {
+    else if (!urlRequired) {
       // Store the claim before I/O. A crash after resume is uncertain, never another accept.
-      await this.run(call.id, "resume", {
-        executionId: payload.executionId,
-        action,
-        ...(content ? { content: JSON.stringify(content) } : {}),
-      });
+      await this.serialize(conversationId, () =>
+        this.run(call.id, "resume", {
+          executionId: payload.executionId,
+          action,
+          ...(content ? { content: JSON.stringify(content) } : {}),
+        }),
+      );
     }
     return this.store.get<McpInteraction>(
       "SELECT * FROM mcp_interactions WHERE id=?",
@@ -442,7 +533,7 @@ export class McpCalls {
   async close() {
     this.closed = true;
     for (const controller of this.controllers) controller.abort();
-    await Promise.allSettled([...this.inflight]);
+    await Promise.allSettled([...this.inflight, ...this.tails.values()]);
   }
   private abandon(interaction: McpInteraction, call: McpCall, action: string) {
     // Local cancellation never bypasses a deny or changes the service's paused execution.
@@ -478,9 +569,20 @@ export class McpCalls {
     )!;
   }
   reconcile(conversationId: string, id: string, note: string) {
+    if (this.closed) throw new PolicyError("Aplicação encerrando");
     if (!note.trim())
       throw new PolicyError(
         "Informe o resultado verificado no serviço externo",
+      );
+    if (
+      this.store.get(
+        "SELECT 1 FROM mcp_interactions WHERE conversationId=? AND callId=? AND state='pending'",
+        conversationId,
+        id,
+      )
+    )
+      throw new PolicyError(
+        "Conclua, recuse ou cancele as solicitações MCP pendentes antes de registrar o resultado verificado",
       );
     this.store.run(
       "UPDATE mcp_calls SET state='reconciled',result=?,updatedAt=? WHERE id=? AND conversationId=? AND state='uncertain'",
