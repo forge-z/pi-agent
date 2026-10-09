@@ -23,6 +23,8 @@ interface Row extends Omit<CuaHandoff, "clipboard"> {
   origin: string;
   binding: string;
   requestKey: string;
+  endReason: "controlReturned" | "requestCancelled" | null;
+  endedAt: number | null;
 }
 export type CuaViewerFactory = (options: {
   origin: string;
@@ -49,7 +51,8 @@ export class CuaHandoffs {
       id TEXT PRIMARY KEY,conversationId TEXT NOT NULL,server TEXT NOT NULL,
       origin TEXT NOT NULL,binding TEXT NOT NULL,requestKey TEXT NOT NULL UNIQUE,
       state TEXT NOT NULL,createdAt INTEGER NOT NULL,expiresAt INTEGER,url TEXT,
-      clipboard INTEGER NOT NULL DEFAULT 0 CHECK(clipboard IN (0,1)));
+      clipboard INTEGER NOT NULL DEFAULT 0 CHECK(clipboard IN (0,1)),
+      endReason TEXT,endedAt INTEGER,feedbackSubmissionId INTEGER);
       CREATE UNIQUE INDEX IF NOT EXISTS cua_origin_hold ON cua_handoffs(origin) WHERE state IN ${held};
       UPDATE cua_handoffs SET state='uncertain',url=NULL WHERE state='creating';`);
     if (
@@ -60,6 +63,16 @@ export class CuaHandoffs {
       store.db.exec(
         "ALTER TABLE cua_handoffs ADD COLUMN clipboard INTEGER NOT NULL DEFAULT 0 CHECK(clipboard IN (0,1))",
       );
+    const columns = store.all<{ name: string }>(
+      "PRAGMA table_info(cua_handoffs)",
+    );
+    for (const [name, type] of [
+      ["endReason", "TEXT"],
+      ["endedAt", "INTEGER"],
+      ["feedbackSubmissionId", "INTEGER"],
+    ])
+      if (!columns.some((column) => column.name === name))
+        store.db.exec(`ALTER TABLE cua_handoffs ADD COLUMN ${name} ${type}`);
     gateway.setDispatchGuard((server) => {
       if (
         this.store.get(
@@ -208,7 +221,13 @@ export class CuaHandoffs {
       server: row.server,
       state: row.state,
       message:
-        "Intervenção humana solicitada. A automação está pausada; o usuário deve abrir o viewer pela interface e devolver o controle explicitamente.",
+        row.state === "ended"
+          ? row.endReason === "controlReturned"
+            ? "Intervenção encerrada por atestação humana: controle devolvido ao Pi. Este pedido não está mais pausado. Isso não comprova revogação remota do viewer nem libera outra intervenção."
+            : row.endReason === "requestCancelled"
+              ? "Intervenção pendente cancelada pelo usuário antes da criação do viewer. Este pedido não está mais pausado; isso não libera outra intervenção nem confirma conclusão da tarefa."
+              : "Intervenção encerrada. Este pedido não está mais pausado; isso não libera outra intervenção nem comprova revogação remota do viewer."
+          : "Intervenção humana solicitada. A automação está pausada; o usuário deve abrir o viewer pela interface e devolver o controle explicitamente.",
     };
   }
   create(
@@ -373,11 +392,51 @@ export class CuaHandoffs {
       }
     }
     this.store.run(
-      "UPDATE cua_handoffs SET state='ended',url=NULL WHERE id=? AND state=?",
+      "UPDATE cua_handoffs SET state='ended',url=NULL,endReason=?,endedAt=? WHERE id=? AND state=?",
+      row.state === "active" ? "controlReturned" : "requestCancelled",
+      Date.now(),
       id,
       row.state,
     );
     return this.publicRow(this.row(conversationId, id));
+  }
+  /** Passive context awaits the next valid human input; End never starts work. */
+  feedback(conversationId: string) {
+    return this.store
+      .all<{
+        id: string;
+        server: string;
+        endReason: "controlReturned" | "requestCancelled";
+        endedAt: number;
+      }>(
+        "SELECT id,server,endReason,endedAt FROM cua_handoffs WHERE conversationId=? AND state='ended' AND endReason IN ('controlReturned','requestCancelled') AND feedbackSubmissionId IS NULL ORDER BY endedAt,rowid",
+        conversationId,
+      )
+      .map((row) => ({
+        id: row.id,
+        requestId: `cua-control/${row.id}`,
+        timestamp: row.endedAt,
+        text:
+          "CUA control update recorded by the application; supersedes the earlier pause result for this handoff only: " +
+          JSON.stringify({
+            id: row.id,
+            server: row.server,
+            state: "ended",
+            disposition: row.endReason,
+          }) +
+          (row.endReason === "controlReturned"
+            ? ". The human explicitly attested that every viewer tab was closed and control was returned to Pi. Do not ask them to return this handoff again. This is human attestation, not proof of remote viewer revocation."
+            : ". The human cancelled this pending request before a viewer was created. This does not confirm completion of the task or login.") +
+          " Other handoffs and permission guards remain independent. Ending did not run the model, repeat an MCP call, resume an uncertain effect, or authorize previously unsent work. Continue only within the current authenticated human request and existing permissions.",
+      }));
+  }
+  feedbackSubmitted(conversationId: string, id: string, submissionId: number) {
+    this.store.run(
+      "UPDATE cua_handoffs SET feedbackSubmissionId=? WHERE id=? AND conversationId=? AND state='ended' AND feedbackSubmissionId IS NULL",
+      submissionId,
+      id,
+      conversationId,
+    );
   }
   async close() {
     this.closed = true;
