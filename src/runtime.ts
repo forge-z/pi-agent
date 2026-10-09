@@ -23,6 +23,7 @@ import {
   type Registry,
   type Submission,
   type SubmissionId,
+  type EntryId,
 } from "@earendil-works/pi-durable";
 import {
   openNodeSqliteDatabase,
@@ -53,8 +54,12 @@ import {
   type ToolGateway,
   type McpCatalog,
 } from "./mcp.js";
-import { McpCalls, type McpCall } from "./mcp-calls.js";
-import { CuaHandoffs, type CuaViewerFactory } from "./cua-handoffs.js";
+import { McpCalls, type McpCall, type McpInteraction } from "./mcp-calls.js";
+import {
+  CuaHandoffs,
+  CuaHandoffError,
+  type CuaViewerFactory,
+} from "./cua-handoffs.js";
 import { Settings, SettingsError } from "./settings.js";
 import { ProviderConnections } from "./provider-connections.js";
 import { Tasks, TaskError } from "./tasks.js";
@@ -1317,6 +1322,8 @@ export class Runtime {
     )
       throw new Error("requestId já utilizado com conteúdo diferente");
     if (source === "web" || source === "telegram") {
+      authorize?.();
+      await this.drainCuaFeedback(conversationId, conversation, authorize);
       await this.drainDeferredOutcomes(conversationId, conversation);
       this.assertConversationAvailable(conversationId);
       this.assertHandoffAvailable(conversationId);
@@ -1581,6 +1588,65 @@ export class Runtime {
       );
     }
   }
+  private async drainCuaFeedback(
+    conversationId: string,
+    conversation: Awaited<ReturnType<Runtime["conversation"]>>,
+    authorize?: () => void,
+  ) {
+    for (const note of this.cuaHandoffs?.feedback(conversationId) ?? []) {
+      this.assertHandoffAvailable(conversationId);
+      const receipt = await this.harness.commit(
+        (tx) =>
+          tx.submissionByRequest(
+            Number(conversationId) as ConversationId,
+            note.requestId,
+          ),
+        context,
+      );
+      this.assertHandoffAvailable(conversationId);
+      authorize?.();
+      // The slash in this identity is outside the app's human request namespace.
+      if (receipt && receipt.type !== "write")
+        throw new CuaHandoffError(
+          "Identidade do retorno CUA incompatível; nenhuma execução será iniciada.",
+        );
+      const submission = receipt
+        ? await this.harness.submission(receipt.id as SubmissionId, context)
+        : await conversation.submit(
+            {
+              type: "write",
+              requestId: note.requestId,
+              entry: {
+                kind: "app.cua-control",
+                model: [
+                  {
+                    role: "user",
+                    content: note.text,
+                    timestamp: note.timestamp,
+                  },
+                ],
+              },
+            },
+            context,
+          );
+      if (!submission)
+        throw new CuaHandoffError(
+          "Retorno CUA persistido sem contexto disponível.",
+        );
+      const status = await submission.status(context);
+      if (status.type !== "write" || status.status === "unanswered")
+        throw new CuaHandoffError(
+          "Contexto de retorno CUA não concluído; nenhuma execução será iniciada.",
+        );
+      // Queued writes remain recoverable until the native receipt proves placement.
+      if (status.status === "done")
+        this.cuaHandoffs!.feedbackSubmitted(
+          conversationId,
+          note.id,
+          Number(submission.id),
+        );
+    }
+  }
   private async drainDeferredOutcomes(
     conversationId: string,
     conversation: Awaited<ReturnType<Runtime["conversation"]>>,
@@ -1626,19 +1692,64 @@ export class Runtime {
       this.monitorSubmission(conversation, submission, row);
     }
   }
-  async snapshot(id: string) {
+  async historyMessage(id: string, entryId: number, index: number) {
+    const conversation = await this.conversation(id);
+    const found = await conversation.entries(
+      { minEntryId: entryId as EntryId, maxEntryId: entryId as EntryId },
+      1,
+      undefined,
+      context,
+    );
+    const entry = found.items[0];
+    const message = entry?.model?.[index];
+    if (
+      !entry ||
+      entry.kind === "app.cua-control" ||
+      !message ||
+      !["user", "assistant", "toolResult"].includes(message.role)
+    )
+      throw new ConversationError("Mensagem não encontrada", 404);
+    return message;
+  }
+  async snapshot(id: string, compact = false) {
     const conversation = await this.conversation(id);
     const view = await conversation.viewState(context);
     try {
       return {
         settings: await this.settings.conversation(id),
         view: view.value,
-        actions: this.store.actions(id),
-        mcpCalls: this.mcpCalls?.list(id) ?? [],
-        mcpInteractions: this.mcpCalls?.interactions(id) ?? [],
+        // Completed MCP payloads already live in immutable history. Compact
+        // clients need only unresolved controls, not a second copy of results.
+        actions: compact
+          ? this.store.all<Action>(
+              `SELECT id,conversationId,server,tool,
+               CASE WHEN state!='pending' AND length(args)>4096
+                 THEN '{"preview":"Conteúdo completo disponível para download"}' ELSE args END AS args,
+               state,substr(result,1,4096) AS result,substr(evidence,1,4096) AS evidence,
+               (length(args)>4096 OR length(result)>4096 OR length(evidence)>4096) AS detailsAvailable
+               FROM actions WHERE conversationId=? ORDER BY rowid`,
+              id,
+            )
+          : this.store.actions(id),
+        mcpCalls:
+          compact && this.mcpCalls
+            ? this.store.all<McpCall>(
+                "SELECT id,conversationId,server,tool,'' AS args,state,substr(result,1,4096) AS result,'' AS binding,updatedAt FROM mcp_calls WHERE conversationId=? AND state='uncertain' ORDER BY rowid",
+                id,
+              )
+            : (this.mcpCalls?.list(id) ?? []),
+        mcpInteractions:
+          compact && this.mcpCalls
+            ? this.store.all<McpInteraction>(
+                "SELECT * FROM mcp_interactions WHERE conversationId=? AND state='pending' ORDER BY rowid",
+                id,
+              )
+            : (this.mcpCalls?.interactions(id) ?? []),
         cuaHandoffs: this.cuaHandoffs?.list(id) ?? [],
         deliveries: this.store.all(
-          "SELECT id,chat,state,result FROM deliveries WHERE id LIKE ?",
+          compact
+            ? "SELECT id,chat,state,NULL AS result FROM deliveries WHERE id LIKE ? AND state='uncertain'"
+            : "SELECT id,chat,state,result FROM deliveries WHERE id LIKE ?",
           `${id}:%`,
         ),
       };

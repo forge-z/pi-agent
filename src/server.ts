@@ -17,6 +17,7 @@ import { SettingsError } from "./settings.js";
 import { webCommandCatalog, CommandError } from "./commands.js";
 import { PolicyError, McpError } from "./mcp.js";
 import { CuaHandoffError } from "./cua-handoffs.js";
+import { chatSnapshot } from "./chat-snapshot.js";
 import {
   TelegramConnection,
   TelegramSetupError,
@@ -534,12 +535,36 @@ export function createAppServer(app: Runtime, options: ServerOptions) {
         );
         if (restoreRoute && method === "POST")
           return json(response, 200, app.restoreConversation(restoreRoute[1]));
+        const messageRoute =
+          /^\/api\/conversations\/([0-9]+)\/history\/([1-9][0-9]{0,15})\/([0-9]{1,6})$/.exec(
+            path,
+          );
+        if (messageRoute && method === "GET") {
+          const [, id, entryId, index] = messageRoute;
+          const number = Number(entryId);
+          if (!Number.isSafeInteger(number))
+            throw new HttpError(400, "Mensagem inválida");
+          return json(
+            response,
+            200,
+            await app.historyMessage(id, number, Number(index)),
+          );
+        }
         const route =
           /^\/api\/conversations\/([0-9]+)(?:\/(messages|events|link|actions|settings)(?:\/([a-f0-9]{24}))?)?$/.exec(
             path,
           );
         if (route) {
           const [, id, resource, actionId] = route;
+          const compact = url.searchParams.get("view") === "chat";
+          const rawPage = url.searchParams.get("page") ?? "0";
+          if (compact && !/^\d{1,9}$/.test(rawPage))
+            throw new HttpError(400, "Página inválida");
+          const page = Number(rawPage);
+          const snapshot = async () => {
+            const value = await app.snapshot(id, compact);
+            return compact ? chatSnapshot(value, page) : value;
+          };
           if (!resource && method === "PUT")
             return json(
               response,
@@ -556,7 +581,7 @@ export function createAppServer(app: Runtime, options: ServerOptions) {
           }
           await app.conversation(id);
           if (!resource && method === "GET")
-            return json(response, 200, await app.snapshot(id));
+            return json(response, 200, await snapshot());
           if (resource === "settings" && method === "PUT")
             return json(
               response,
@@ -603,6 +628,15 @@ export function createAppServer(app: Runtime, options: ServerOptions) {
             await app.recordAction(action);
             return json(response, 200, action);
           }
+          if (resource === "actions" && method === "GET" && actionId) {
+            const action = app.store.get(
+              "SELECT * FROM actions WHERE id=? AND conversationId=?",
+              actionId,
+              id,
+            );
+            if (!action) throw new HttpError(404, "Ação não encontrada");
+            return json(response, 200, action);
+          }
           if (resource === "events" && method === "GET") {
             response.writeHead(200, {
               "content-type": "text/event-stream; charset=utf-8",
@@ -616,6 +650,7 @@ export function createAppServer(app: Runtime, options: ServerOptions) {
             let sending = false;
             let closed = false;
             let lastSnapshotHash: string | undefined;
+            let lastHistoryVersion: string | undefined;
             let lastListVersion: string | undefined;
             let detach: (() => void) | undefined;
             let poll: ReturnType<typeof setInterval> | undefined;
@@ -698,17 +733,37 @@ export function createAppServer(app: Runtime, options: ServerOptions) {
                   response.end();
                   return;
                 }
-                const snapshot = await app.snapshot(id);
-                const encoded = JSON.stringify(snapshot);
-                const snapshotHash = hash(encoded);
+                const current = await snapshot();
+                const history =
+                  "history" in current ? current.history : undefined;
+                const state = history
+                  ? {
+                      ...current,
+                      history: undefined,
+                      historyVersion: history.version,
+                    }
+                  : current;
+                const encodedState = JSON.stringify(state);
+                const snapshotHash = hash(encodedState);
                 // Keep polling for SQLite-only transitions (approvals, MCP,
                 // deliveries). Deduplicate before the browser parses SSE/JSON,
                 // and keep only a digest rather than another history in memory.
                 if (!closed && snapshotHash !== lastSnapshotHash) {
-                  response.write(`event: snapshot\ndata: ${encoded}\n\n`);
+                  // Existing clients still receive full snapshots. Compact
+                  // streams send a page only when its immutable message keys
+                  // change; live/control transitions carry no history bodies.
+                  const includeHistory =
+                    !history || history.version !== lastHistoryVersion;
+                  const encoded = includeHistory
+                    ? JSON.stringify(current)
+                    : encodedState;
+                  response.write(
+                    `event: ${includeHistory ? "snapshot" : "state"}\ndata: ${encoded}\n\n`,
+                  );
                   // A false write result is already queued by Node. Do not
                   // retransmit it; resume with the latest state after drain.
                   lastSnapshotHash = snapshotHash;
+                  lastHistoryVersion = history?.version;
                 }
               } catch {
                 response.end();

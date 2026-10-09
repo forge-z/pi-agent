@@ -8,13 +8,18 @@ const historyWindow = runInNewContext(
     "utf8",
   ).replaceAll("export ", "") + "\nhistoryWindow",
 ) as (
-  entries: { model?: { role: string; content?: string }[] }[],
+  entries: {
+    id?: number;
+    kind?: string;
+    model?: { role: string; content?: string }[];
+  }[],
   page?: number,
 ) => {
   messages: { role: string; content?: string }[];
   page: number;
   pages: number;
   total: number;
+  keys: (string | null)[];
 };
 test("long histories have a bounded DOM page and every older message remains accessible", () => {
   const entries = Array.from({ length: 10001 }, (_, index) => ({
@@ -42,4 +47,43 @@ test("bookkeeping entries do not create blank pages and an empty conversation st
   assert.equal(historyWindow([{ model: [{ role: "system" }] }, {}]).total, 0);
   assert.equal(historyWindow([]).messages.length, 0);
   assert.equal(historyWindow([]).pages, 1);
+});
+
+test("passive CUA control metadata stays in the source history without appearing as a human message or consuming pages", () => {
+  const entries = Array.from({ length: 81 }, (_, index) => ({
+    id: index,
+    kind: "pi.user",
+    model: [{ role: "user", content: `Human message ${index}` }],
+  }));
+  const feedback = {
+    id: 1000,
+    kind: "app.cua-control",
+    model: [{ role: "user", content: "Internal CUA control update" }],
+  };
+  const source = [...entries.slice(0, 40), feedback, ...entries.slice(40)];
+  const first = historyWindow(source);
+  assert.equal(first.total, 81);
+  assert.equal(first.pages, 2);
+  assert.equal(first.messages.length, 80);
+  assert.equal(first.messages[0].content, "Human message 1");
+  assert.equal(first.messages.at(-1)?.content, "Human message 80");
+  assert.ok(
+    !first.messages.some(
+      (message) => message.content === feedback.model[0].content,
+    ),
+  );
+  assert.ok(!first.keys.includes("1000:0"));
+  const older = historyWindow(source, 1);
+  assert.equal(older.messages.length, 1);
+  assert.equal(older.messages[0].content, "Human message 0");
+  assert.equal(older.keys[0], "0:0");
+  assert.equal(
+    source[40],
+    feedback,
+    "presentation must preserve the stored/model entry",
+  );
+  const onlyFeedback = historyWindow([feedback]);
+  assert.equal(onlyFeedback.total, 0);
+  assert.equal(onlyFeedback.pages, 1);
+  assert.equal(onlyFeedback.messages.length, 0);
 });

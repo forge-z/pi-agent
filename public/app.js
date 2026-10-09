@@ -135,6 +135,15 @@ document.addEventListener("keydown", (event) => {
   }
 });
 async function api(path, method = "GET", data) {
+  // Existing API consumers retain full snapshots. The chat opts into bounded
+  // server pages for every refresh, including command/approval callbacks.
+  let snapshotSelectionVersion;
+  let snapshotRenderVersion;
+  if (method === "GET" && /^\/api\/conversations\/[0-9]+$/.test(path)) {
+    snapshotSelectionVersion = conversationSelectionVersion;
+    snapshotRenderVersion = renderVersion;
+    path += `?view=chat&page=${historyPage}`;
+  }
   const response = await fetch(path, {
     method,
     headers: data ? { "content-type": "application/json" } : {},
@@ -149,6 +158,22 @@ async function api(path, method = "GET", data) {
     error.status = response.status;
     throw error;
   }
+  if (
+    snapshotSelectionVersion !== undefined &&
+    result &&
+    typeof result === "object"
+  )
+    Object.defineProperty(result, "uiSelectionVersion", {
+      value: snapshotSelectionVersion,
+    });
+  if (
+    snapshotRenderVersion !== undefined &&
+    result &&
+    typeof result === "object"
+  )
+    Object.defineProperty(result, "uiRenderVersion", {
+      value: snapshotRenderVersion,
+    });
   return result;
 }
 function showLogin() {
@@ -751,7 +776,12 @@ async function select(id, title) {
   )
     return;
   render(snapshot);
-  events = new EventSource(`/api/conversations/${id}/events`);
+  subscribeConversation(id, selectionVersion, historyPage);
+}
+function subscribeConversation(id, selectionVersion, selectedPage) {
+  events = new EventSource(
+    `/api/conversations/${id}/events?view=chat&page=${selectedPage}`,
+  );
   conversationEvents.start(events);
   events.addEventListener("snapshot", (event) => {
     if (
@@ -759,6 +789,16 @@ async function select(id, title) {
       id === conversationId
     )
       render(JSON.parse(event.data));
+  });
+  events.addEventListener("state", (event) => {
+    if (
+      selectionVersion !== conversationSelectionVersion ||
+      id !== conversationId
+    )
+      return;
+    const state = JSON.parse(event.data);
+    if (state.historyVersion !== lastSnapshot?.history?.version) return;
+    render({ ...state, history: lastSnapshot.history });
   });
   events.onopen = () => {
     if (
@@ -780,6 +820,7 @@ async function select(id, title) {
   };
 }
 let rendered = null;
+let renderVersion = 0;
 let renderedActions = "";
 let historyPage = 0;
 let lastSnapshot = null;
@@ -795,8 +836,65 @@ function updateRunStatus() {
         : t("Conversa salva"),
   );
 }
+async function changeHistoryPage(next) {
+  const id = conversationId;
+  const version = ++conversationSelectionVersion;
+  sendRefreshVersion++;
+  const previous = historyPage;
+  historyPage = next;
+  events?.close();
+  conversationEvents.stop();
+  try {
+    const snapshot = await api(`/api/conversations/${id}`);
+    if (version !== conversationSelectionVersion || id !== conversationId)
+      return;
+    render(snapshot);
+    subscribeConversation(id, version, historyPage);
+    document.querySelector(".conversation-body").scrollTop = 0;
+  } catch (error) {
+    if (version === conversationSelectionVersion && id === conversationId) {
+      historyPage = previous;
+      subscribeConversation(id, version, historyPage);
+    }
+    throw error;
+  }
+}
+function fullContentButton(path, filename) {
+  const download = uiNode("button", () => t("Baixar conteúdo completo"));
+  download.type = "button";
+  download.onclick = guard(async () => {
+    download.disabled = true;
+    try {
+      const value = await api(path);
+      const url = URL.createObjectURL(
+        new Blob([JSON.stringify(value, null, 2)], {
+          type: "application/json;charset=utf-8",
+        }),
+      );
+      const link = node("a");
+      link.href = url;
+      link.download = filename;
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } finally {
+      download.disabled = false;
+    }
+  });
+  return download;
+}
 function render(snapshot) {
+  if (
+    snapshot.uiSelectionVersion !== undefined &&
+    snapshot.uiSelectionVersion !== conversationSelectionVersion
+  )
+    return;
+  if (
+    snapshot.uiRenderVersion !== undefined &&
+    snapshot.uiRenderVersion !== renderVersion
+  )
+    return;
   if (snapshot === rendered) return;
+  renderVersion++;
   rendered = snapshot;
   lastSnapshot = snapshot;
   settingsUI.updateConversation(snapshot.settings);
@@ -804,7 +902,8 @@ function render(snapshot) {
   const nearBottom =
     container.scrollHeight - container.scrollTop - container.clientHeight < 120;
   const messages = [];
-  const page = historyWindow(snapshot.view.entries, historyPage);
+  const page =
+    snapshot.history || historyWindow(snapshot.view.entries, historyPage);
   historyPage = page.page;
   if (page.pages > 1) {
     if (!historyNavigation) {
@@ -814,6 +913,10 @@ function render(snapshot) {
       const newer = uiNode("button", () => t("Ver mais recentes"));
       const label = node("span");
       const change = (next) => {
+        if (lastSnapshot.history) {
+          void changeHistoryPage(next).catch(report);
+          return;
+        }
         historyPage = next;
         rendered = null;
         render(lastSnapshot);
@@ -838,6 +941,13 @@ function render(snapshot) {
       continue;
     }
     const start = messages.length;
+    const download =
+      message.previewTruncated && key
+        ? fullContentButton(
+            `/api/conversations/${conversationId}/history/${key.replace(":", "/")}`,
+            "pi-mensagem.json",
+          )
+        : null;
     if (!["user", "assistant", "toolResult"].includes(message.role)) continue;
     if (message.role === "assistant")
       messages.push(
@@ -855,6 +965,7 @@ function render(snapshot) {
             .map((c) => c.text)
             .join("\n");
     if (!blocks) {
+      if (download) messages.push(download);
       if (key) historyNodes.set(key, messages.slice(start));
       continue;
     }
@@ -889,6 +1000,14 @@ function render(snapshot) {
       plain(body, blocks);
     else body.append(renderMarkdown(blocks));
     article.append(speaker, body);
+    if (download) {
+      body.append(
+        uiNode("p", () =>
+          t("Prévia. O conteúdo completo permanece salvo na conversa."),
+        ),
+      );
+      article.append(download);
+    }
     messages.push(article);
     if (key) historyNodes.set(key, messages.slice(start));
   }
@@ -1012,6 +1131,13 @@ function render(snapshot) {
       );
       if (action.result)
         card.append(details("Resultado", () => readableResult(action.result)));
+      if (action.detailsAvailable)
+        card.append(
+          fullContentButton(
+            `/api/conversations/${actionConversation}/actions/${action.id}`,
+            "pi-acao.json",
+          ),
+        );
       if (action.state === "pending") {
         const buttons = node("div", undefined, "action-buttons");
         for (const [decision, label] of [
