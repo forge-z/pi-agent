@@ -557,13 +557,18 @@ test("HTTP mint/end require authenticated same-origin human and exact conversati
   const dir = await mkdtemp(join(tmpdir(), "pi-cua-http-"));
   const mock = gatewayFixture();
   let creates = 0;
+  const clipboardChoices: boolean[] = [];
   const app = await Runtime.open({
     dir,
     gateway: mock.gateway,
     cuaViewerFactory: () => ({
-      createTicket: async (principal) => {
+      createTicket: async (principal, clipboard = false) => {
         creates++;
-        return ticket(principal);
+        clipboardChoices.push(clipboard);
+        return {
+          ...ticket(principal),
+          url: `https://cua.example/viewer/#ticket=${ticketSecret}&clipboard=${clipboard ? 1 : 0}`,
+        };
       },
     }),
   });
@@ -617,12 +622,28 @@ test("HTTP mint/end require authenticated same-origin human and exact conversati
       400,
     );
     assert.equal(creates, 0);
+    for (const permissions of [
+      { clipboard: "true" },
+      { clipboard: null },
+      { clipboard: 1 },
+      { filesRoot: "" },
+      { audio: false },
+      { ttl: 1800 },
+    ]) {
+      assert.equal(
+        (await post(path + "/create", permissions, cookie)).status,
+        400,
+      );
+      assert.equal(creates, 0);
+      assert.equal(app.cuaHandoffs!.list(id)[0].state, "pending");
+      assert.equal(app.cuaHandoffs!.list(id)[0].clipboard, false);
+    }
     const created = await post(path + "/create", {}, cookie);
     assert.equal(created.status, 200);
-    assert.match(
-      JSON.stringify(await created.json()),
-      /private-human-viewer-ticket/,
-    );
+    const createdBody = (await created.json()) as { clipboard: boolean };
+    assert.match(JSON.stringify(createdBody), /private-human-viewer-ticket/);
+    assert.equal(createdBody.clipboard, false);
+    assert.deepEqual(clipboardChoices, [false]);
     assert.equal(creates, 1);
     assert.equal((await post(path + "/create", {}, cookie)).status, 400);
     assert.equal(
@@ -639,6 +660,25 @@ test("HTTP mint/end require authenticated same-origin human and exact conversati
       ).status,
       200,
     );
+    const optedIn = app.cuaHandoffs!.request(id, 61, "cua");
+    const enabled = await post(
+      `/api/conversations/${id}/cua-handoffs/${optedIn.id}/create`,
+      { clipboard: true },
+      cookie,
+    );
+    assert.equal(enabled.status, 200);
+    const enabledBody = (await enabled.json()) as {
+      clipboard: boolean;
+      url: string;
+    };
+    assert.equal(enabledBody.clipboard, true);
+    assert.equal(
+      new URLSearchParams(new URL(enabledBody.url).hash.slice(1)).get(
+        "clipboard",
+      ),
+      "1",
+    );
+    assert.deepEqual(clipboardChoices, [false, true]);
   } finally {
     await web.close();
     await app.close();
@@ -859,6 +899,191 @@ test("held calendars preserve both cron and once occurrence timestamps and pendi
   } finally {
     await tasks?.close();
     await app.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("only explicit human creation persists clipboard consent and provider results never expose the grant", async () => {
+  const choices: boolean[] = [];
+  const f = await fixture(() => ({
+    createTicket: async (principal, clipboard = false) => {
+      choices.push(clipboard);
+      return {
+        ...ticket(principal),
+        url: `https://cua.example/viewer/#ticket=${ticketSecret}&clipboard=${clipboard ? 1 : 0}`,
+      };
+    },
+  }));
+  try {
+    const request = f.handoffs.request("1", 1000, "cua");
+    assert.equal(f.handoffs.list("1")[0].clipboard, false);
+    const active = await f.handoffs.create("1", request.id, {
+      clipboard: true,
+    });
+    assert.deepEqual(choices, [true]);
+    assert.equal(active.clipboard, true);
+    assert.equal(f.handoffs.list("1")[0].clipboard, true);
+    assert.equal(
+      f.store.get<{ clipboard: number }>(
+        "SELECT clipboard FROM cua_handoffs WHERE id=?",
+        request.id,
+      )!.clipboard,
+      1,
+    );
+    const modelResult = f.handoffs.request("1", 1000, "cua");
+    assert.equal("clipboard" in modelResult, false);
+    assert.doesNotMatch(
+      JSON.stringify(modelResult),
+      /https:|ticket=|clipboard/,
+    );
+    await assert.rejects(
+      f.handoffs.create("1", request.id, { clipboard: false }),
+      /não será emitido novamente/,
+    );
+    assert.deepEqual(choices, [true]);
+    assert.equal(f.handoffs.list("1")[0].clipboard, true);
+  } finally {
+    await f.close();
+  }
+});
+
+test("malformed clipboard and additional permission requests reject before mutation or RPC; omitted choice stays disabled", async () => {
+  const choices: boolean[] = [];
+  const f = await fixture(() => ({
+    createTicket: async (principal, clipboard = false) => {
+      choices.push(clipboard);
+      return ticket(principal);
+    },
+  }));
+  try {
+    const request = f.handoffs.request("1", 1001, "cua");
+    for (const input of [
+      null,
+      [],
+      "true",
+      { clipboard: "true" },
+      { clipboard: 1 },
+      { clipboard: null },
+      { clipboard: undefined },
+      { audio: false },
+      { filesRoot: "" },
+      { ttl: 1800 },
+      { clipboard: true, permissions: { files: true } },
+    ]) {
+      await assert.rejects(
+        f.handoffs.create("1", request.id, input),
+        /Permissões CUA inválidas/,
+      );
+      assert.equal(f.handoffs.list("1")[0].state, "pending");
+      assert.equal(f.handoffs.list("1")[0].clipboard, false);
+      assert.equal(choices.length, 0);
+    }
+    const active = await f.handoffs.create("1", request.id);
+    assert.equal(active.clipboard, false);
+    assert.deepEqual(choices, [false]);
+  } finally {
+    await f.close();
+  }
+});
+
+test("the creating claim atomically freezes clipboard consent across input changes and duplicate mint requests", async () => {
+  const entered = deferred(),
+    release = deferred();
+  const choices: boolean[] = [];
+  const f = await fixture(() => ({
+    createTicket: async (principal, clipboard = false) => {
+      choices.push(clipboard);
+      entered.resolve();
+      await release.promise;
+      return {
+        ...ticket(principal),
+        url: `https://cua.example/viewer/#ticket=${ticketSecret}&clipboard=${clipboard ? 1 : 0}`,
+      };
+    },
+  }));
+  try {
+    const request = f.handoffs.request("1", 1002, "cua"),
+      input = { clipboard: true };
+    const creation = f.handoffs.create("1", request.id, input);
+    await entered.promise;
+    input.clipboard = false;
+    assert.equal(f.handoffs.list("1")[0].state, "creating");
+    assert.equal(f.handoffs.list("1")[0].clipboard, true);
+    await assert.rejects(
+      f.handoffs.create("1", request.id, { clipboard: false }),
+      /não será emitido novamente/,
+    );
+    release.resolve();
+    const active = await creation;
+    assert.equal(active.clipboard, true);
+    assert.deepEqual(choices, [true]);
+    assert.equal(f.handoffs.holds("1"), true);
+  } finally {
+    release.resolve();
+    await f.close();
+  }
+});
+
+test("additive migration keeps legacy active and pending grants disabled and preserves opted-in grant across restart", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "pi-cua-clipboard-migrate-"));
+  const mock = gatewayFixture();
+  let store = new Store(dir),
+    calls = new McpCalls(store, mock.gateway);
+  let creates = 0;
+  const factory: CuaViewerFactory = () => ({
+    createTicket: async (principal, clipboard = false) => {
+      creates++;
+      return {
+        ...ticket(principal),
+        url: `https://cua.example/viewer/#ticket=${ticketSecret}&clipboard=${clipboard ? 1 : 0}`,
+      };
+    },
+  });
+  let handoffs: CuaHandoffs | undefined;
+  try {
+    const expires = Date.now() + 1800000,
+      binding = mock.gateway.credentialBinding("cua");
+    store.db.exec(
+      "CREATE TABLE cua_handoffs(id TEXT PRIMARY KEY,conversationId TEXT NOT NULL,server TEXT NOT NULL,origin TEXT NOT NULL,binding TEXT NOT NULL,requestKey TEXT NOT NULL UNIQUE,state TEXT NOT NULL,createdAt INTEGER NOT NULL,expiresAt INTEGER,url TEXT)",
+    );
+    store.run(
+      "INSERT INTO cua_handoffs VALUES ('old-active','1','cua','https://cua.example',?,'1:old','active',?,?,?)",
+      binding,
+      Date.now(),
+      expires,
+      ticket("old").url,
+    );
+    handoffs = new CuaHandoffs(store, mock.gateway, async () => false, factory);
+    assert.equal(handoffs.list("1")[0].clipboard, false);
+    assert.equal(handoffs.list("1")[0].url, ticket("old").url);
+    assert.equal(creates, 0);
+    assert.equal(handoffs.holds("1"), true);
+    handoffs.end("1", "old-active", {
+      allTabsClosed: true,
+      controlReturned: true,
+    });
+    const next = handoffs.request("2", 1003, "cua");
+    assert.equal(handoffs.list("2")[0].clipboard, false);
+    await handoffs.create("2", next.id, { clipboard: true });
+    await handoffs.close();
+    await calls.close();
+    store.close();
+    store = new Store(dir);
+    calls = new McpCalls(store, mock.gateway);
+    handoffs = new CuaHandoffs(store, mock.gateway, async () => false, factory);
+    assert.equal(handoffs.list("1")[0].clipboard, false);
+    assert.equal(handoffs.list("2")[0].clipboard, true);
+    assert.equal(handoffs.list("2")[0].state, "active");
+    assert.equal(handoffs.holds("2"), true);
+    assert.equal(creates, 1);
+    await assert.rejects(
+      handoffs.create("2", next.id, { clipboard: false }),
+      /não será emitido novamente/,
+    );
+  } finally {
+    await handoffs?.close();
+    await calls.close();
+    store.close();
     await rm(dir, { recursive: true, force: true });
   }
 });

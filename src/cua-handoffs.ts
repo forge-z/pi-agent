@@ -16,8 +16,10 @@ export interface CuaHandoff {
   createdAt: number;
   expiresAt: number | null;
   url: string | null;
+  clipboard: boolean;
 }
-interface Row extends CuaHandoff {
+interface Row extends Omit<CuaHandoff, "clipboard"> {
+  clipboard: number;
   origin: string;
   binding: string;
   requestKey: string;
@@ -46,9 +48,18 @@ export class CuaHandoffs {
     store.db.exec(`CREATE TABLE IF NOT EXISTS cua_handoffs(
       id TEXT PRIMARY KEY,conversationId TEXT NOT NULL,server TEXT NOT NULL,
       origin TEXT NOT NULL,binding TEXT NOT NULL,requestKey TEXT NOT NULL UNIQUE,
-      state TEXT NOT NULL,createdAt INTEGER NOT NULL,expiresAt INTEGER,url TEXT);
+      state TEXT NOT NULL,createdAt INTEGER NOT NULL,expiresAt INTEGER,url TEXT,
+      clipboard INTEGER NOT NULL DEFAULT 0 CHECK(clipboard IN (0,1)));
       CREATE UNIQUE INDEX IF NOT EXISTS cua_origin_hold ON cua_handoffs(origin) WHERE state IN ${held};
       UPDATE cua_handoffs SET state='uncertain',url=NULL WHERE state='creating';`);
+    if (
+      !store
+        .all<{ name: string }>("PRAGMA table_info(cua_handoffs)")
+        .some((column) => column.name === "clipboard")
+    )
+      store.db.exec(
+        "ALTER TABLE cua_handoffs ADD COLUMN clipboard INTEGER NOT NULL DEFAULT 0 CHECK(clipboard IN (0,1))",
+      );
     gateway.setDispatchGuard((server) => {
       if (
         this.store.get(
@@ -73,11 +84,13 @@ export class CuaHandoffs {
     );
   }
   list(conversationId: string): CuaHandoff[] {
-    return this.store.all<CuaHandoff>(
-      "SELECT id,conversationId,server,state,createdAt,expiresAt,CASE WHEN state='active' AND expiresAt>? THEN url ELSE NULL END AS url FROM cua_handoffs WHERE conversationId=? ORDER BY rowid",
-      Date.now(),
-      conversationId,
-    );
+    return this.store
+      .all<Omit<CuaHandoff, "clipboard"> & { clipboard: number }>(
+        "SELECT id,conversationId,server,state,createdAt,expiresAt,clipboard,CASE WHEN state='active' AND expiresAt>? THEN url ELSE NULL END AS url FROM cua_handoffs WHERE conversationId=? ORDER BY rowid",
+        Date.now(),
+        conversationId,
+      )
+      .map((row) => ({ ...row, clipboard: row.clipboard === 1 }));
   }
   private row(conversationId: string, id: string) {
     const row = this.store.get<Row>(
@@ -101,6 +114,7 @@ export class CuaHandoffs {
       state,
       createdAt,
       expiresAt,
+      clipboard: row.clipboard === 1,
       url: state === "active" && (expiresAt ?? 0) > Date.now() ? url : null,
     };
   }
@@ -197,15 +211,33 @@ export class CuaHandoffs {
         "Intervenção humana solicitada. A automação está pausada; o usuário deve abrir o viewer pela interface e devolver o controle explicitamente.",
     };
   }
-  create(conversationId: string, id: string): Promise<CuaHandoff> {
-    const operation = this.createOnce(conversationId, id);
+  create(
+    conversationId: string,
+    id: string,
+    input: unknown = {},
+  ): Promise<CuaHandoff> {
+    const operation = this.createOnce(conversationId, id, input);
     this.inflight.add(operation);
     void operation
       .finally(() => this.inflight.delete(operation))
       .catch(() => {});
     return operation;
   }
-  private async createOnce(conversationId: string, id: string) {
+  private async createOnce(conversationId: string, id: string, input: unknown) {
+    if (
+      !input ||
+      typeof input !== "object" ||
+      Array.isArray(input) ||
+      Object.keys(input).some((key) => key !== "clipboard")
+    )
+      throw new CuaHandoffError(
+        "Permissões CUA inválidas: informe apenas clipboard como booleano.",
+      );
+    const clipboard = "clipboard" in input ? input.clipboard : false;
+    if (typeof clipboard !== "boolean")
+      throw new CuaHandoffError(
+        "Permissões CUA inválidas: informe apenas clipboard como booleano.",
+      );
     if (this.closed)
       throw new CuaHandoffError(
         "Serviço encerrando; intervenção CUA indisponível.",
@@ -240,7 +272,8 @@ export class CuaHandoffs {
     // Claim before the first await: duplicate clicks and prompt admission cannot race minting.
     if (
       !this.store.run(
-        "UPDATE cua_handoffs SET state='creating' WHERE id=? AND state='pending'",
+        "UPDATE cua_handoffs SET state='creating',clipboard=? WHERE id=? AND state='pending'",
+        clipboard ? 1 : 0,
         id,
       ).changes
     )
@@ -274,7 +307,7 @@ export class CuaHandoffs {
       dispatched = true;
       const ticket: CuaViewerTicket = await this.factory(
         credential,
-      ).createTicket(`pi-handoff-${id}`);
+      ).createTicket(`pi-handoff-${id}`, clipboard);
       if (this.gateway.credentialBinding(row.server) !== row.binding)
         throw new CuaHandoffError(
           "Conexão CUA mudou; a intervenção permanece incerta e pausada.",
