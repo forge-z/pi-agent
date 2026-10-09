@@ -705,7 +705,8 @@ async function workspace() {
   const conversations = await loadConversations();
   const wanted = new URLSearchParams(location.search).get("c");
   const current =
-    conversations.find((c) => c.id === wanted) || conversations[0];
+    conversations.find((c) => c.id === wanted) ||
+    conversations.find((c) => c.channel !== "telegram");
   if (current) await select(current.id, current.title);
   else await create();
 }
@@ -1689,7 +1690,8 @@ conversationManagementUI = attachConversationManagementUI(api, {
     text($("conversation-title"), () => t("Nova conversa"));
     history.replaceState(null, "", location.pathname);
     const available = await loadConversations();
-    if (available.length) await select(available[0].id, available[0].title);
+    const next = available.find((c) => c.channel !== "telegram");
+    if (next) await select(next.id, next.title);
     else await create();
   },
 });

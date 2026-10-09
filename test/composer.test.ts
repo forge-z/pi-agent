@@ -225,3 +225,150 @@ test("pending HTTP admission shows immediate feedback without clearing the draft
   ui.press();
   assert.equal(ui.requests.length, 1);
 });
+
+type SidebarConversation = {
+  id: string;
+  title: string;
+  channel?: "web" | "telegram";
+};
+
+function selectionPolicyFixture(
+  conversations: SidebarConversation[],
+  search = "",
+) {
+  const source = readFileSync(
+    new URL("../public/app.js", import.meta.url),
+    "utf8",
+  );
+  const workspaceStart = source.indexOf("async function workspace()");
+  const workspaceCode = source.slice(
+    workspaceStart,
+    source.indexOf("async function select(id, title)", workspaceStart),
+  );
+  const deleteStart = source.indexOf("afterDelete: async (id, wasActive) => {");
+  const deleteCallback = source.slice(
+    deleteStart + "afterDelete: ".length,
+    source.indexOf("\n  },\n});", deleteStart) + "\n  }".length,
+  );
+  const selected: string[] = [];
+  const created: unknown[] = [];
+  const elements = new Map<string, { hidden: boolean; value: string }>();
+  let listReads = 0;
+  const controller = runInNewContext(
+    `let conversationId="deleted", conversationSelectionVersion=0, events=null,
+      pendingMessage=null, rendered=null, renderedActions="", historyNavigation=null,
+      historyPage=0, lastSnapshot=null;
+     async function select(id) { conversationId=id; recordSelection(id); }
+     ${workspaceCode}
+     ({ workspace, afterDelete: ${deleteCallback}, current: () => conversationId });`,
+    {
+      $: (id: string) => {
+        if (!elements.has(id)) elements.set(id, { hidden: false, value: "" });
+        return elements.get(id)!;
+      },
+      URLSearchParams,
+      location: { search, pathname: "/" },
+      refreshStatus: async () => {},
+      settingsUI: { load: async () => {}, updateConversation() {} },
+      loadConversations: async () => {
+        listReads++;
+        return conversations;
+      },
+      api: async (path: string, method: string, data: unknown) => {
+        assert.equal(path, "/api/conversations");
+        assert.equal(method, "POST");
+        created.push(data);
+        return { id: "fresh-web", title: "Nova conversa", channel: "web" };
+      },
+      recordSelection: (id: string) => selected.push(id),
+      conversationManagementUI: { showActiveView() {} },
+      conversationEvents: { stop() {} },
+      sessionStorage: { removeItem() {} },
+      clearCommandPolls() {},
+      historyNodes: { clear() {} },
+      history: { replaceState() {} },
+      sidebar() {},
+      text() {},
+      t: (value: string) => value,
+    },
+  ) as {
+    workspace(): Promise<void>;
+    afterDelete(id: string, wasActive: boolean): Promise<void>;
+    current(): string | null;
+  };
+  return {
+    controller,
+    selected,
+    created,
+    get listReads() {
+      return listReads;
+    },
+  };
+}
+
+const telegramFirst: SidebarConversation[] = [
+  { id: "telegram-newest", title: "Telegram", channel: "telegram" },
+  { id: "web-newest", title: "Web", channel: "web" },
+  { id: "legacy-web", title: "Legacy web" },
+];
+
+test("workspace without a usable URL selects the newest web conversation after Telegram creation", async () => {
+  for (const search of ["", "?c=deleted-id"]) {
+    const f = selectionPolicyFixture(telegramFirst, search);
+    await f.controller.workspace();
+    assert.deepEqual(f.selected, ["web-newest"]);
+    assert.equal(f.created.length, 0);
+  }
+});
+
+test("workspace preserves an explicit valid web or Telegram history URL", async () => {
+  for (const id of ["web-newest", "legacy-web", "telegram-newest"]) {
+    const f = selectionPolicyFixture(telegramFirst, `?c=${id}`);
+    await f.controller.workspace();
+    assert.deepEqual(f.selected, [id]);
+    assert.equal(f.created.length, 0);
+  }
+});
+
+test("workspace with only Telegram histories creates a fresh web conversation by default", async () => {
+  for (const search of ["", "?c=deleted-web"]) {
+    const f = selectionPolicyFixture(telegramFirst.slice(0, 1), search);
+    await f.controller.workspace();
+    assert.deepEqual(f.selected, ["fresh-web"]);
+    assert.equal(f.created.length, 1);
+    assert.equal(
+      JSON.stringify(f.created[0]),
+      JSON.stringify({ title: "Nova conversa" }),
+    );
+  }
+});
+
+test("workspace still treats a legacy conversation without origin metadata as web", async () => {
+  const f = selectionPolicyFixture([telegramFirst[0], telegramFirst[2]]);
+  await f.controller.workspace();
+  assert.deepEqual(f.selected, ["legacy-web"]);
+  assert.equal(f.created.length, 0);
+});
+
+test("deleting the selected conversation falls back to web, preserving Telegram read-only histories", async () => {
+  const f = selectionPolicyFixture(telegramFirst);
+  await f.controller.afterDelete("deleted", true);
+  assert.deepEqual(f.selected, ["web-newest"]);
+  assert.equal(f.created.length, 0);
+});
+
+test("deleting the selected conversation creates fresh web when only Telegram histories survive", async () => {
+  const f = selectionPolicyFixture(telegramFirst.slice(0, 1));
+  await f.controller.afterDelete("deleted", true);
+  assert.deepEqual(f.selected, ["fresh-web"]);
+  assert.equal(f.created.length, 1);
+});
+
+test("deleting a different conversation refreshes the list without replacing selection", async () => {
+  const f = selectionPolicyFixture(telegramFirst);
+  await f.controller.afterDelete("other", false);
+  assert.equal(f.controller.current(), "deleted");
+  assert.deepEqual(f.selected, []);
+  assert.equal(f.created.length, 0);
+  assert.equal(f.listReads, 1);
+});
