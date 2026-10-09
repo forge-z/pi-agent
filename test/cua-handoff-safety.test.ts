@@ -737,3 +737,211 @@ test("invalid, unauthenticated and non-human admissions cannot drain deferred ou
     await f.close();
   }
 });
+
+test("startup skips deleted owners with deferred input and write receipts; restore retains native receipt identity", async () => {
+  const f = await nativeFixture();
+  try {
+    let app = f.app;
+    const inputId = await app.create(),
+      writeId = await app.create();
+    const action: Action = {
+      id: "7".repeat(24),
+      conversationId: inputId,
+      server: "legacy",
+      tool: "write",
+      args: "{}",
+      state: "denied",
+      result: null,
+      evidence: "{}",
+    };
+    await app.recordAction(action);
+    await settle(app, inputId);
+    const inputRequest = `action:${action.id}:denied`;
+    app.store.run(
+      "UPDATE requests SET status='deferred' WHERE conversationId=? AND requestId=?",
+      inputId,
+      inputRequest,
+    );
+    const writeRequest = "mcp:deleted-write:reconciled:local",
+      note = "Previously written result for archived owner";
+    app.store.run(
+      "INSERT INTO requests(conversationId,requestId,text,source,status) VALUES (?,?,?,'system','deferred')",
+      writeId,
+      writeRequest,
+      note,
+    );
+    await (
+      await (
+        await app.conversation(writeId)
+      ).submit(
+        {
+          type: "write",
+          requestId: writeRequest,
+          entry: {
+            kind: "app.outcome",
+            model: [{ role: "user", content: note, timestamp: Date.now() }],
+          },
+        },
+        context,
+      )
+    ).wait(context);
+    const inputReceipt = await app.harness.commit(
+      (tx) =>
+        tx.submissionByRequest(
+          Number(inputId) as Parameters<typeof tx.submissionByRequest>[0],
+          inputRequest,
+        ),
+      context,
+    );
+    const writeReceipt = await app.harness.commit(
+      (tx) =>
+        tx.submissionByRequest(
+          Number(writeId) as Parameters<typeof tx.submissionByRequest>[0],
+          writeRequest,
+        ),
+      context,
+    );
+    await app.deleteConversation(inputId);
+    await app.deleteConversation(writeId);
+    const calls = f.faux.state.callCount;
+    app = await f.reopen();
+    assert.equal(f.faux.state.callCount, calls);
+    assert.equal(app.store.conversationDeleted(inputId), true);
+    assert.equal(app.store.conversationDeleted(writeId), true);
+    assert.equal(
+      app.store.all("SELECT 1 FROM requests WHERE status='deferred'").length,
+      2,
+    );
+    app.restoreConversation(inputId);
+    app.restoreConversation(writeId);
+    await app.submit(inputId, "restored-input-owner", "continue explicitly");
+    await settle(app, inputId);
+    await app.submit(writeId, "restored-write-owner", "continue explicitly");
+    await settle(app, writeId);
+    for (const [id, requestId, before] of [
+      [inputId, inputRequest, inputReceipt],
+      [writeId, writeRequest, writeReceipt],
+    ] as const) {
+      const after = await app.harness.commit(
+        (tx) =>
+          tx.submissionByRequest(
+            Number(id) as Parameters<typeof tx.submissionByRequest>[0],
+            requestId,
+          ),
+        context,
+      );
+      assert.equal(after!.id, before!.id);
+      assert.equal(after!.type, before!.type);
+      assert.equal(
+        app.store.get<{ status: string }>(
+          "SELECT status FROM requests WHERE conversationId=? AND requestId=?",
+          id,
+          requestId,
+        )!.status,
+        "done",
+      );
+    }
+    assert.equal(
+      (await nativeEntries(app, inputId)).filter(
+        (entry) => entry.kind === "app.outcome",
+      ).length,
+      0,
+    );
+    assert.equal(
+      (await nativeEntries(app, writeId)).filter(
+        (entry) => entry.kind === "app.outcome",
+      ).length,
+      1,
+    );
+    assert.equal(f.counts.writes, 0);
+    assert.equal(f.counts.resumes, 0);
+  } finally {
+    await f.close();
+  }
+});
+
+test("outcomes arriving during a settings reservation defer without CUA and drain once on the next explicit human prompt", async () => {
+  const f = await nativeFixture();
+  let release!: () => void;
+  try {
+    let app = f.app;
+    const id = await app.create();
+    let entered!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const ready = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const change = app.withConversationSettings(id, async () => {
+      entered();
+      await gate;
+    });
+    await ready;
+    const action: Action = {
+      id: "6".repeat(24),
+      conversationId: id,
+      server: "legacy",
+      tool: "write",
+      args: "{}",
+      state: "denied",
+      result: null,
+      evidence: "{}",
+    };
+    const call = ledgerCall("5".repeat(24), id);
+    await Promise.all([app.recordAction(action), app.recordMcpOutcome(call)]);
+    assert.equal(app.isConversationHeld(id), false);
+    const deferred = app.store.all<{ requestId: string }>(
+      "SELECT requestId FROM requests WHERE conversationId=? AND status='deferred'",
+      id,
+    );
+    assert.equal(deferred.length, 2);
+    assert.equal(f.faux.state.callCount, 0);
+    assert.equal((await app.harness.inspect(context)).submissions.length, 0);
+    release();
+    await change;
+    assert.equal(f.faux.state.callCount, 0);
+    await app.submit(id, "human-after-settings", "continue explicitly");
+    await settle(app, id);
+    assert.equal(
+      (await nativeEntries(app, id)).filter(
+        (entry) => entry.kind === "app.outcome",
+      ).length,
+      2,
+    );
+    assert.equal(f.faux.state.callCount, 1);
+    // Reacquiring missed passive settlement receipts remains read-only across restart.
+    for (const row of deferred)
+      app.store.run(
+        "UPDATE requests SET status='deferred' WHERE conversationId=? AND requestId=?",
+        id,
+        row.requestId,
+      );
+    app = await f.reopen();
+    await settle(app, id);
+    assert.equal(f.faux.state.callCount, 1);
+    for (const row of deferred)
+      assert.equal(
+        app.store.get<{ status: string }>(
+          "SELECT status FROM requests WHERE conversationId=? AND requestId=?",
+          id,
+          row.requestId,
+        )!.status,
+        "done",
+      );
+    await app.submit(id, "human-after-settings", "continue explicitly");
+    await settle(app, id);
+    assert.equal(f.faux.state.callCount, 1);
+    assert.equal(
+      (await nativeEntries(app, id)).filter(
+        (entry) => entry.kind === "app.outcome",
+      ).length,
+      2,
+    );
+    assert.equal(f.counts.writes, 0);
+    assert.equal(f.counts.resumes, 0);
+  } finally {
+    release?.();
+    await f.close();
+  }
+});

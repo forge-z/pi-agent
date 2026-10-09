@@ -429,6 +429,7 @@ export class Runtime {
       for (const row of app.store.all<RequestRow>(
         "SELECT * FROM requests WHERE status='pending' OR (source='system' AND status='deferred')",
       )) {
+        if (app.store.conversationDeleted(row.conversationId)) continue;
         if (
           app.isConversationHeld(row.conversationId) ||
           row.status === "deferred"
@@ -1209,11 +1210,7 @@ export class Runtime {
         "system",
       );
     } catch (error) {
-      if (
-        !(error instanceof ConversationBusyError) ||
-        !this.isConversationHeld(conversationId)
-      )
-        throw error;
+      if (!(error instanceof ConversationBusyError)) throw error;
       this.store.run(
         "UPDATE requests SET status='deferred' WHERE conversationId=? AND requestId=? AND status='pending'",
         conversationId,
