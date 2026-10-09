@@ -54,7 +54,11 @@ import {
   type McpCatalog,
 } from "./mcp.js";
 import { McpCalls, type McpCall } from "./mcp-calls.js";
-import { CuaHandoffs, type CuaViewerFactory } from "./cua-handoffs.js";
+import {
+  CuaHandoffs,
+  CuaHandoffError,
+  type CuaViewerFactory,
+} from "./cua-handoffs.js";
 import { Settings, SettingsError } from "./settings.js";
 import { ProviderConnections } from "./provider-connections.js";
 import { Tasks, TaskError } from "./tasks.js";
@@ -1317,6 +1321,8 @@ export class Runtime {
     )
       throw new Error("requestId já utilizado com conteúdo diferente");
     if (source === "web" || source === "telegram") {
+      authorize?.();
+      await this.drainCuaFeedback(conversationId, conversation, authorize);
       await this.drainDeferredOutcomes(conversationId, conversation);
       this.assertConversationAvailable(conversationId);
       this.assertHandoffAvailable(conversationId);
@@ -1579,6 +1585,65 @@ export class Runtime {
         conversationId,
         requestId,
       );
+    }
+  }
+  private async drainCuaFeedback(
+    conversationId: string,
+    conversation: Awaited<ReturnType<Runtime["conversation"]>>,
+    authorize?: () => void,
+  ) {
+    for (const note of this.cuaHandoffs?.feedback(conversationId) ?? []) {
+      this.assertHandoffAvailable(conversationId);
+      const receipt = await this.harness.commit(
+        (tx) =>
+          tx.submissionByRequest(
+            Number(conversationId) as ConversationId,
+            note.requestId,
+          ),
+        context,
+      );
+      this.assertHandoffAvailable(conversationId);
+      authorize?.();
+      // The slash in this identity is outside the app's human request namespace.
+      if (receipt && receipt.type !== "write")
+        throw new CuaHandoffError(
+          "Identidade do retorno CUA incompatível; nenhuma execução será iniciada.",
+        );
+      const submission = receipt
+        ? await this.harness.submission(receipt.id as SubmissionId, context)
+        : await conversation.submit(
+            {
+              type: "write",
+              requestId: note.requestId,
+              entry: {
+                kind: "app.cua-control",
+                model: [
+                  {
+                    role: "user",
+                    content: note.text,
+                    timestamp: note.timestamp,
+                  },
+                ],
+              },
+            },
+            context,
+          );
+      if (!submission)
+        throw new CuaHandoffError(
+          "Retorno CUA persistido sem contexto disponível.",
+        );
+      const status = await submission.status(context);
+      if (status.type !== "write" || status.status === "unanswered")
+        throw new CuaHandoffError(
+          "Contexto de retorno CUA não concluído; nenhuma execução será iniciada.",
+        );
+      // Queued writes remain recoverable until the native receipt proves placement.
+      if (status.status === "done")
+        this.cuaHandoffs!.feedbackSubmitted(
+          conversationId,
+          note.id,
+          Number(submission.id),
+        );
     }
   }
   private async drainDeferredOutcomes(
