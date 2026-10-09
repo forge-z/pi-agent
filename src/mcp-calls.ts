@@ -47,6 +47,7 @@ export class McpCalls {
   constructor(
     private store: Store,
     private gateway: McpGateway,
+    private admission: (conversationId: string) => void = () => {},
   ) {
     store.db
       .exec(`CREATE TABLE IF NOT EXISTS mcp_calls(id TEXT PRIMARY KEY, conversationId TEXT NOT NULL, server TEXT NOT NULL, tool TEXT NOT NULL, args TEXT NOT NULL, state TEXT NOT NULL, result TEXT, binding TEXT NOT NULL, updatedAt INTEGER NOT NULL);
@@ -112,6 +113,7 @@ export class McpCalls {
     signal?: AbortSignal,
   ) {
     if (this.closed) throw new PolicyError("Aplicação encerrando");
+    this.admission(conversationId);
     if (signal?.aborted)
       throw new McpNotSentError("Chamada MCP cancelada antes do envio.");
     this.gateway.assertDirect(server, tool);
@@ -169,6 +171,7 @@ export class McpCalls {
       );
     const binding = await this.gateway.connectionBinding(server);
     if (this.closed) throw new PolicyError("Aplicação encerrando");
+    this.admission(conversationId);
     if (signal?.aborted)
       throw new McpNotSentError("Chamada MCP cancelada antes do envio.");
     this.store.run(
@@ -214,6 +217,13 @@ export class McpCalls {
         throw new McpNotSentError(
           "Aplicação encerrando; nenhuma chamada MCP foi enviada",
         );
+      try {
+        this.admission(call.conversationId);
+      } catch {
+        throw new McpNotSentError(
+          "CUA pausado para intervenção humana. Nenhuma chamada MCP foi enviada.",
+        );
+      }
       const result = await this.gateway.callDirect(call.server, tool, args, {
         signal: combined,
         binding: call.binding,
@@ -431,6 +441,7 @@ export class McpCalls {
     content?: Record<string, unknown>,
   ) {
     if (this.closed) throw new PolicyError("Aplicação encerrando");
+    this.admission(conversationId);
     if (!["accept", "decline", "cancel"].includes(action))
       throw new PolicyError("Decisão MCP inválida");
     const interaction = this.store.get<McpInteraction>(
@@ -570,6 +581,7 @@ export class McpCalls {
   }
   reconcile(conversationId: string, id: string, note: string) {
     if (this.closed) throw new PolicyError("Aplicação encerrando");
+    this.admission(conversationId);
     if (!note.trim())
       throw new PolicyError(
         "Informe o resultado verificado no serviço externo",
