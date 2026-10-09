@@ -48,6 +48,8 @@ let providerPoll = null;
 let promptId = null;
 let pendingMessage = null;
 let sendingMessage = null;
+let sendRefreshVersion = 0;
+let conversationsLoadVersion = 0;
 let conversationsCache = [];
 let conversationManagementUI = null;
 const mobile = window.matchMedia("(max-width: 760px)");
@@ -141,6 +143,8 @@ async function api(path, method = "GET", data) {
   return result;
 }
 function showLogin() {
+  sendRefreshVersion++;
+  conversationsLoadVersion++;
   events?.close();
   clearInterval(providerPoll);
   providerPoll = null;
@@ -652,7 +656,10 @@ function renderConversations() {
   conversationManagementUI?.render(conversationsCache);
 }
 async function loadConversations() {
-  conversationsCache = await api("/api/conversations");
+  const version = ++conversationsLoadVersion;
+  const conversations = await api("/api/conversations");
+  if (version !== conversationsLoadVersion) return conversationsCache;
+  conversationsCache = conversations;
   const current = conversationsCache.find(
     (conversation) => conversation.id === conversationId,
   );
@@ -700,6 +707,7 @@ async function create() {
   await select(conversation.id, "Nova conversa");
 }
 async function select(id, title) {
+  sendRefreshVersion++;
   events?.close();
   pendingMessage = JSON.parse(
     sessionStorage.getItem(`pending:${id}`) || "null",
@@ -1378,6 +1386,36 @@ $("logout").onclick = guard(async () => {
   await api("/api/logout", "POST", {});
   showLogin();
 });
+async function refreshAfterMessage(sentConversation, version) {
+  const beforeRefresh = rendered;
+  const refresh =
+    sentConversation === conversationId
+      ? api(`/api/conversations/${sentConversation}`).then((snapshot) => {
+          if (
+            sentConversation === conversationId &&
+            version === sendRefreshVersion &&
+            rendered === beforeRefresh
+          )
+            render(snapshot);
+        })
+      : Promise.resolve();
+  const results = await Promise.allSettled([refresh, loadConversations()]);
+  if (sentConversation !== conversationId || version !== sendRefreshVersion)
+    return;
+  const failed = results.find((result) => result.status === "rejected");
+  if (failed) {
+    const detail =
+      failed.reason instanceof Error
+        ? failed.reason.message
+        : String(failed.reason);
+    const refreshError = new Error(detail);
+    refreshError.uiMessage = () =>
+      t("Mensagem recebida. A atualização da tela falhou: {0}", [
+        errorText(detail),
+      ]);
+    report(refreshError);
+  }
+}
 $("message-form").onsubmit = guard(async (event) => {
   event.preventDefault();
   const content = $("message").value;
@@ -1398,6 +1436,7 @@ $("message-form").onsubmit = guard(async (event) => {
     JSON.stringify(pendingMessage),
   );
   const outgoingMessage = { ...pendingMessage };
+  const refreshVersion = ++sendRefreshVersion;
   sendingMessage = outgoingMessage;
   updateRunStatus();
   attr($("send"), "aria-label", () => t("Enviando…"));
@@ -1429,33 +1468,13 @@ $("message-form").onsubmit = guard(async (event) => {
       return;
     }
     sessionStorage.removeItem(`pending:${sentConversation}`);
-    const refresh =
-      sentConversation === conversationId
-        ? api(`/api/conversations/${sentConversation}`).then((snapshot) => {
-            if (sentConversation === conversationId) render(snapshot);
-          })
-        : Promise.resolve();
     if (sentConversation === conversationId) {
       if ($("message").value === content) $("message").value = "";
       if (pendingMessage?.requestId === outgoingMessage.requestId)
         pendingMessage = null;
     }
-    // Transcript and navigation are independent reads; pay one network round trip.
-    // Keep the admission guard until both settle, including failures.
-    const results = await Promise.allSettled([refresh, loadConversations()]);
-    const failed = results.find((result) => result.status === "rejected");
-    if (failed) {
-      const detail =
-        failed.reason instanceof Error
-          ? failed.reason.message
-          : String(failed.reason);
-      const refreshError = new Error(detail);
-      refreshError.uiMessage = () =>
-        t("Mensagem recebida. A atualização da tela falhou: {0}", [
-          errorText(detail),
-        ]);
-      throw refreshError;
-    }
+    // Admission is complete at ACK. Reads must not hold the next message.
+    void refreshAfterMessage(sentConversation, refreshVersion).catch(report);
   } finally {
     sendingMessage = null;
     updateRunStatus();
