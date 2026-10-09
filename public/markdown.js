@@ -15,6 +15,21 @@ export function renderMarkdown(source, doc = document) {
   // A large single token (for example base64 in JSON) can overflow the
   // JavaScript engine's regexp stack. Never send unbounded text to Marked.
   if (text.length > 32768) return renderTextPreview(text, doc);
+  // A small string can still make the lexer spend seconds backtracking on
+  // unbalanced emphasis. Bound syntax BEFORE parsing; counting tokens after
+  // lexer() returns cannot protect clicks or the message submission handler.
+  let syntax = 0;
+  for (const character of text) {
+    const code = character.charCodeAt(0);
+    // Include all ASCII punctuation, including list markers (-, +, .),
+    // autolinks and escapes, rather than only emphasis delimiters.
+    const punctuation =
+      (code >= 33 && code <= 47) ||
+      (code >= 58 && code <= 64) ||
+      (code >= 91 && code <= 96) ||
+      (code >= 123 && code <= 126);
+    if (punctuation && ++syntax > 256) return renderTextPreview(text, doc);
+  }
   try {
     const tokens = lexer(text);
     const pending = [tokens];
