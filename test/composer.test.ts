@@ -17,6 +17,7 @@ interface KeyEvent {
 }
 class Element {
   value = "";
+  textContent = "";
   disabled = false;
   selectionStart = 0;
   selectionEnd = 0;
@@ -113,6 +114,7 @@ function composer() {
     message,
     form: element("message-form"),
     send: element("send"),
+    status: element("run-status"),
     requests,
     press(options: Partial<KeyEvent> = {}) {
       let prevented = false;
@@ -204,4 +206,15 @@ test("Cmd+Enter still sends while Shift+Enter, Alt+Enter and other keys keep the
   combined.message.value = "Atalho anterior";
   combined.press({ metaKey: true, ctrlKey: true });
   assert.equal(combined.requests.length, 1);
+});
+
+test("pending HTTP admission shows immediate feedback without clearing the draft or retrying", () => {
+  const ui = composer();
+  ui.message.value = "Pending draft";
+  ui.press();
+  assert.equal(ui.status.textContent, "Enviando…");
+  assert.equal(ui.message.value, "Pending draft");
+  assert.equal(ui.send.disabled, true);
+  ui.press();
+  assert.equal(ui.requests.length, 1);
 });

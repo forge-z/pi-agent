@@ -47,6 +47,7 @@ let providerFlow = null;
 let providerPoll = null;
 let promptId = null;
 let pendingMessage = null;
+let sendingMessage = null;
 let conversationsCache = [];
 let conversationManagementUI = null;
 const mobile = window.matchMedia("(max-width: 760px)");
@@ -160,7 +161,7 @@ function showLogin() {
   settingsUI.reset();
 }
 function report(error) {
-  text($("error"), () => errorText(error.message));
+  text($("error"), () => error.uiMessage?.() ?? errorText(error.message));
 }
 const guard =
   (fn) =>
@@ -713,6 +714,7 @@ async function select(id, title) {
   historyNavigation = null;
   historyPage = 0;
   lastSnapshot = null;
+  updateRunStatus();
   text($("connection"), () => t("Conectando"));
   $("connection").dataset.state = "connecting";
   plain($("conversation-title"), title);
@@ -743,6 +745,15 @@ let lastSnapshot = null;
 // Durable transcript entries are immutable; cache only the visible page.
 const historyNodes = new Map();
 let historyNavigation = null;
+function updateRunStatus() {
+  text($("run-status"), () =>
+    sendingMessage?.conversationId === conversationId
+      ? t("Enviando…")
+      : lastSnapshot?.view.docs["pi.live"]?.run
+        ? t("Pi está trabalhando…")
+        : t("Conversa salva"),
+  );
+}
 function render(snapshot) {
   if (snapshot === rendered) return;
   rendered = snapshot;
@@ -875,9 +886,7 @@ function render(snapshot) {
   $("main-content").classList.toggle("is-empty", empty);
   $("messages").replaceChildren(...messages);
   toolVisibility.apply();
-  text($("run-status"), () =>
-    live?.run ? t("Pi está trabalhando…") : t("Conversa salva"),
-  );
+  updateRunStatus();
   const actionLabels = {
     pending: "Aguardando você",
     running: "Em andamento",
@@ -1389,6 +1398,10 @@ $("message-form").onsubmit = guard(async (event) => {
     JSON.stringify(pendingMessage),
   );
   const outgoingMessage = { ...pendingMessage };
+  sendingMessage = outgoingMessage;
+  updateRunStatus();
+  attr($("send"), "aria-label", () => t("Enviando…"));
+  $("send").setAttribute("aria-busy", "true");
   $("send").disabled = true;
   plain($("error"), "");
   try {
@@ -1397,6 +1410,8 @@ $("message-form").onsubmit = guard(async (event) => {
       "POST",
       outgoingMessage,
     );
+    sendingMessage = null;
+    updateRunStatus();
     if (result?.kind === "command") {
       sessionStorage.removeItem(`pending:${sentConversation}`);
       await handleCommandResult(
@@ -1414,14 +1429,38 @@ $("message-form").onsubmit = guard(async (event) => {
       return;
     }
     sessionStorage.removeItem(`pending:${sentConversation}`);
+    const refresh =
+      sentConversation === conversationId
+        ? api(`/api/conversations/${sentConversation}`).then((snapshot) => {
+            if (sentConversation === conversationId) render(snapshot);
+          })
+        : Promise.resolve();
     if (sentConversation === conversationId) {
       if ($("message").value === content) $("message").value = "";
-      pendingMessage = null;
-      const snapshot = await api(`/api/conversations/${sentConversation}`);
-      if (sentConversation === conversationId) render(snapshot);
+      if (pendingMessage?.requestId === outgoingMessage.requestId)
+        pendingMessage = null;
     }
-    await loadConversations();
+    // Transcript and navigation are independent reads; pay one network round trip.
+    // Keep the admission guard until both settle, including failures.
+    const results = await Promise.allSettled([refresh, loadConversations()]);
+    const failed = results.find((result) => result.status === "rejected");
+    if (failed) {
+      const detail =
+        failed.reason instanceof Error
+          ? failed.reason.message
+          : String(failed.reason);
+      const refreshError = new Error(detail);
+      refreshError.uiMessage = () =>
+        t("Mensagem recebida. A atualização da tela falhou: {0}", [
+          errorText(detail),
+        ]);
+      throw refreshError;
+    }
   } finally {
+    sendingMessage = null;
+    updateRunStatus();
+    $("send").removeAttribute("aria-busy");
+    attr($("send"), "aria-label", () => t("Enviar mensagem"));
     $("send").disabled = false;
   }
 });

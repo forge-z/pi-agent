@@ -281,8 +281,15 @@ test("the chat renderer applies the preference to history and live updates while
     return element;
   };
   const i18n = interfaceLanguage().i18n;
-  runInNewContext(appSource.slice(start, end), {
+  const statusSource = appSource.slice(
+    appSource.indexOf("function updateRunStatus()"),
+    appSource.indexOf("function render(snapshot)"),
+  );
+  runInNewContext(statusSource + appSource.slice(start, end), {
     ...i18n,
+    sendingMessage: null,
+    lastSnapshot: snapshot,
+    conversationId: "2",
     uiNode: (tag: string, render: () => string, className = "") =>
       i18n.text(node(tag, undefined, className), render),
     snapshot,

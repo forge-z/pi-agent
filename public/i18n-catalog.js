@@ -85,6 +85,9 @@ globalThis.PiEnglish = {
   "Enter envia · Ctrl + Enter nova linha":
     "Enter to send · Ctrl + Enter for a new line",
   "Enviar mensagem": "Send message",
+  "Enviando…": "Sending…",
+  "Mensagem recebida. A atualização da tela falhou: {0}":
+    "Message received. The display refresh failed: {0}",
   "Enviar mensagem (Enter)": "Send message (Enter)",
   "Ideias para começar": "Ideas to get started",
   "Organizar meu dia": "Organize my day",
