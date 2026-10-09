@@ -50,6 +50,7 @@ function fixture() {
     `
     let conversationId=null, conversationSelectionVersion=0, sendRefreshVersion=0, events=null,
       pendingMessage=null, rendered=null, renderedActions="", historyNavigation=null, historyPage=0, lastSnapshot=null;
+    function render(snapshot) { lastSnapshot=snapshot; recordRender(snapshot); }
     ${code}
     select;
   `,
@@ -74,7 +75,7 @@ function fixture() {
         reads.push({ path, gate });
         return gate.promise;
       },
-      render: (snapshot: unknown) => renders.push(snapshot),
+      recordRender: (snapshot: unknown) => renders.push(snapshot),
       EventSource: FakeEvents,
     },
   ) as (id: string, title: string) => Promise<void>;
@@ -104,6 +105,41 @@ test("overlapping A to B to A selection cannot apply an old A snapshot or open a
     "an already superseded selection does not fetch another history",
   );
   assert.equal(JSON.stringify(f.renders), JSON.stringify([{ latest: true }]));
+});
+
+test("compact state reuses the current history and refuses mismatched or closed-stream revisions", async () => {
+  const f = fixture();
+  const selected = f.select("1", "A");
+  f.lists[0]!.resolve();
+  await flush();
+  const history = {
+    version: "page-v1",
+    messages: [{ role: "user", content: "original" }],
+  };
+  f.reads[0]!.gate.resolve({ history, view: { docs: {} } });
+  await selected;
+  const stream = f.streams[0]!;
+  stream.listeners.get("state")!({
+    data: JSON.stringify({
+      historyVersion: "page-v1",
+      view: { docs: { live: true } },
+    }),
+  });
+  assert.equal(f.renders.length, 2);
+  assert.deepEqual((f.renders[1] as { history: unknown }).history, history);
+  stream.listeners.get("state")!({
+    data: JSON.stringify({ historyVersion: "stale-v0", view: { docs: {} } }),
+  });
+  assert.equal(f.renders.length, 2);
+  const next = f.select("2", "B");
+  stream.listeners.get("state")!({
+    data: JSON.stringify({ historyVersion: "page-v1", view: { docs: {} } }),
+  });
+  assert.equal(f.renders.length, 2);
+  f.lists[1]!.resolve();
+  await flush();
+  f.reads[1]!.gate.resolve({ history: { version: "b" }, view: { docs: {} } });
+  await next;
 });
 
 test("queued snapshot callbacks from a closed A stream are ignored after selecting A again", async () => {
