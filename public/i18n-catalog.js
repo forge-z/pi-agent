@@ -66,6 +66,9 @@ globalThis.PiEnglish = {
   "Mostrar chamadas de ferramentas": "Show tool calls",
   Ferramentas: "Tools",
   "Configurar Telegram": "Set up Telegram",
+  "Concluí a etapa externa": "I completed the external step",
+  "Concluir esta etapa externa não confirma o resultado da ação. Confira o serviço e registre o resultado antes de continuar.":
+    "Completing this external step does not confirm the action's result. Check the service and record the result before continuing.",
   "SEU DIA, COM MAIS CLAREZA": "YOUR DAY, WITH MORE CLARITY",
   "O que vamos": "What shall we",
   "resolver hoje?": "work on today?",
@@ -734,8 +737,34 @@ globalThis.PiEnglish = {
     "I confirm replacing the current DeepSeek API key.",
   "Confirmo substituir a credencial DeepSeek atual.":
     "I confirm replacing the current DeepSeek credential.",
+  "Servidor MCP solicitou uma interação URL inválida":
+    "The MCP server requested an invalid URL interaction",
+  "Servidor MCP solicitou um endereço de interação inválido":
+    "The MCP server requested an invalid interaction address",
+  "Servidor MCP exige uma etapa externa por URL. Conclua ou cancele as solicitações e verifique separadamente o resultado da chamada original; ela não será repetida automaticamente.":
+    "The MCP server requires an external step via URL. Complete or cancel the requests and separately verify the original call’s result; it will not be repeated automatically.",
+  "Servidor MCP solicitou uma interação URL inválida; verifique o resultado da chamada no serviço sem repeti-la automaticamente.":
+    "The MCP server requested an invalid URL interaction; verify the call’s result at the service without repeating it automatically.",
+  "Não foi possível salvar as solicitações MCP. Verifique o resultado da chamada no serviço; ela não será repetida automaticamente.":
+    "Could not save the MCP requests. Verify the call’s result at the service; it will not be repeated automatically.",
+  "Conclua, recuse ou cancele as solicitações MCP pendentes antes de registrar o resultado verificado":
+    "Complete, decline or cancel pending MCP requests before recording the verified result",
+  "Aguarde a chamada ou retomada MCP em andamento; nenhuma nova ferramenta foi enviada":
+    "Wait for the active MCP call or resume to finish; no new tool was sent",
+  "Aplicação encerrando; nenhuma chamada MCP foi enviada":
+    "The application is shutting down; no MCP call was sent",
+  "Chamada MCP cancelada antes do envio.": "MCP call canceled before sending.",
 };
 globalThis.PiInterfaceErrors = [
+  "Aguarde a chamada ou retomada MCP em andamento; nenhuma nova ferramenta foi enviada",
+  "Aplicação encerrando; nenhuma chamada MCP foi enviada",
+  "Chamada MCP cancelada antes do envio.",
+  "Servidor MCP solicitou uma interação URL inválida",
+  "Servidor MCP solicitou um endereço de interação inválido",
+  "Servidor MCP exige uma etapa externa por URL. Conclua ou cancele as solicitações e verifique separadamente o resultado da chamada original; ela não será repetida automaticamente.",
+  "Servidor MCP solicitou uma interação URL inválida; verifique o resultado da chamada no serviço sem repeti-la automaticamente.",
+  "Não foi possível salvar as solicitações MCP. Verifique o resultado da chamada no serviço; ela não será repetida automaticamente.",
+  "Conclua, recuse ou cancele as solicitações MCP pendentes antes de registrar o resultado verificado",
   "Decisão MCP inválida",
   "Tempo de resposta MCP excedido. O resultado da chamada pode ser incerto.",
   "Falha na conexão ou operação MCP. Confira endpoint, transporte e disponibilidade do servidor.",

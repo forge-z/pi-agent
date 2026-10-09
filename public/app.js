@@ -1018,6 +1018,8 @@ function render(snapshot) {
     for (const interaction of nativeInteractions) {
       const interactionConversation = conversationId;
       const payload = JSON.parse(interaction.payload);
+      const externalStep =
+        interaction.kind === "url" && payload.source === "url_required_error";
       const card = node("article", undefined, "action-card");
       const heading = node("div", undefined, "action-heading");
       heading.append(
@@ -1041,6 +1043,17 @@ function render(snapshot) {
         node("pre", JSON.stringify(payload, null, 2)),
       );
       card.append(detail);
+      if (externalStep)
+        card.append(
+          uiNode(
+            "p",
+            () =>
+              t(
+                "Concluir esta etapa externa não confirma o resultado da ação. Confira o serviço e registre o resultado antes de continuar.",
+              ),
+            "action-note",
+          ),
+        );
       if (interaction.kind === "url") {
         try {
           const url = new URL(payload.url);
@@ -1115,7 +1128,9 @@ function render(snapshot) {
       const error = node("p", undefined, "error");
       error.setAttribute("role", "alert");
       const controls = node("div", undefined, "action-buttons");
-      const accept = uiNode("button", () => t("Aceitar"));
+      const accept = uiNode("button", () =>
+        t(externalStep ? "Concluí a etapa externa" : "Aceitar"),
+      );
       accept.type = "submit";
       const decide = async (action) => {
         let content;
@@ -1187,6 +1202,12 @@ function render(snapshot) {
       (call) => call.state === "uncertain",
     );
     const safeMcpErrors = new Set([
+      "Servidor MCP solicitou uma interação URL inválida",
+      "Servidor MCP solicitou um endereço de interação inválido",
+      "Servidor MCP exige uma etapa externa por URL. Conclua ou cancele as solicitações e verifique separadamente o resultado da chamada original; ela não será repetida automaticamente.",
+      "Servidor MCP solicitou uma interação URL inválida; verifique o resultado da chamada no serviço sem repeti-la automaticamente.",
+      "Não foi possível salvar as solicitações MCP. Verifique o resultado da chamada no serviço; ela não será repetida automaticamente.",
+      "Conclua, recuse ou cancele as solicitações MCP pendentes antes de registrar o resultado verificado",
       "MCP recusou a autenticação (HTTP 401). Verifique o token ou o método de login exigido pelo servidor.",
       "MCP recusou a autenticação (HTTP 403). Verifique o token ou o método de login exigido pelo servidor.",
       "Endpoint MCP incompatível ou não encontrado (HTTP 404). Confira o endpoint MCP completo.",

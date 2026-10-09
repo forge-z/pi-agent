@@ -4,10 +4,13 @@ import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import { AjvJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/ajv";
 import {
   ElicitRequestSchema,
+  ElicitRequestURLParamsSchema,
+  UrlElicitationRequiredError,
   CallToolResultSchema,
   type ElicitRequest,
   type ElicitResult,
   type Tool,
+  type ElicitRequestURLParams,
 } from "@modelcontextprotocol/sdk/types.js";
 import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
@@ -28,6 +31,74 @@ export class McpError extends Error {}
 export class McpSessionError extends McpError {}
 // Created only before dispatch; transport errors from callTool are never assigned this type.
 export class McpNotSentError extends McpError {}
+export function validateMcpUrlElicitation(
+  value: unknown,
+): ElicitRequestURLParams {
+  // The SDK URL schema normalizes whitespace; reject malformed raw URLs first.
+  if (
+    !value ||
+    typeof value !== "object" ||
+    !("url" in value) ||
+    typeof value.url !== "string" ||
+    value.url.length > 4096 ||
+    /[\u0000-\u0020\u007f]/.test(value.url)
+  )
+    throw new McpError("Servidor MCP solicitou uma interação URL inválida");
+  const parsed = ElicitRequestURLParamsSchema.safeParse(value);
+  if (!parsed.success)
+    throw new McpError("Servidor MCP solicitou uma interação URL inválida");
+  const { url, message, elicitationId } = parsed.data;
+  if (
+    !elicitationId.trim() ||
+    elicitationId.length > 200 ||
+    message.length > 2000 ||
+    url.length > 4096 ||
+    /[\u0000-\u0020\u007f]/.test(url) ||
+    /[\u0000-\u001f\u007f]/.test(elicitationId)
+  )
+    throw new McpError("Servidor MCP solicitou uma interação URL inválida");
+  let address: URL;
+  try {
+    address = new URL(url);
+  } catch {
+    throw new McpError("Servidor MCP solicitou uma interação URL inválida");
+  }
+  if (
+    address.protocol !== "https:" ||
+    address.username ||
+    address.password ||
+    address.href.length > 4096
+  )
+    throw new McpError(
+      "Servidor MCP solicitou um endereço de interação inválido",
+    );
+  return {
+    mode: "url",
+    url: address.href,
+    message: message.replace(
+      /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g,
+      " ",
+    ),
+    elicitationId,
+  };
+}
+export class McpUrlElicitationRequiredError extends McpError {
+  readonly elicitations: readonly ElicitRequestURLParams[];
+  constructor(value: unknown) {
+    if (!Array.isArray(value) || !value.length || value.length > 8)
+      throw new McpError("Servidor MCP solicitou uma interação URL inválida");
+    const elicitations = value.map(validateMcpUrlElicitation);
+    if (
+      new Set(elicitations.map((item) => item.elicitationId)).size !==
+      elicitations.length
+    )
+      throw new McpError("Servidor MCP solicitou uma interação URL inválida");
+    super(
+      "Servidor MCP exige uma etapa externa por URL. Conclua ou cancele as solicitações e verifique separadamente o resultado da chamada original; ela não será repetida automaticamente.",
+    );
+    this.elicitations = elicitations;
+  }
+}
 export interface ToolGateway {
   assertAllowed?(server: string, tool: string, kind: "read" | "action"): void;
   catalog?(): Promise<unknown>;
@@ -52,6 +123,7 @@ export interface McpCatalog {
   mode: "direct" | "legacy";
   tools: (Tool & { operation: "direct" | "read" | "action" })[];
   error?: string;
+  instructions?: string;
 }
 export function mcpToolName(server: string, tool: string) {
   const hash = createHash("sha256")
@@ -69,6 +141,26 @@ function safeError(error: unknown): McpError {
     error && typeof error === "object" && "code" in error
       ? error.code
       : undefined;
+  if (code === -32042) {
+    try {
+      const value =
+        error instanceof UrlElicitationRequiredError
+          ? error.elicitations
+          : error &&
+              typeof error === "object" &&
+              "data" in error &&
+              error.data &&
+              typeof error.data === "object" &&
+              "elicitations" in error.data
+            ? error.data.elicitations
+            : undefined;
+      return new McpUrlElicitationRequiredError(value);
+    } catch {
+      return new McpError(
+        "Servidor MCP solicitou uma interação URL inválida; verifique o resultado da chamada no serviço sem repeti-la automaticamente.",
+      );
+    }
+  }
   if (code === 401 || code === 403)
     return new McpError(
       `MCP recusou a autenticação (HTTP ${code}). Verifique o token ou o método de login exigido pelo servidor.`,
@@ -88,6 +180,7 @@ function safeError(error: unknown): McpError {
 export class McpGateway implements ToolGateway {
   private clients = new Map<string, Promise<Client>>();
   private bindings = new WeakMap<Client, string>();
+  private secrets = new WeakMap<Client, string>();
   private expired = new WeakSet<Client>();
   private metadata = new WeakMap<
     Client,
@@ -408,6 +501,14 @@ export class McpGateway implements ToolGateway {
               );
             return parsed;
           } catch (error) {
+            // URL completion never authorizes replay, including locally classified reads.
+            if (
+              error &&
+              typeof error === "object" &&
+              "code" in error &&
+              error.code === -32042
+            )
+              throw safeError(error);
             if (this.expired.has(client)) {
               await this.discard(server, client);
               // Direct tools can execute arbitrary effects, including tools with
@@ -449,6 +550,7 @@ export class McpGateway implements ToolGateway {
             { name: "pi-personal-agent", version: "0.1.0" },
             { capabilities: { elicitation: { form: {}, url: {} } } },
           );
+          this.secrets.set(client, headers.Authorization?.slice(7) ?? "");
           this.bindings.set(
             client,
             createHash("sha256")
@@ -562,9 +664,21 @@ export class McpGateway implements ToolGateway {
         .map(async (config) => {
           try {
             const discovered = await this.discover(config.name);
+            const client = await this.clients.get(config.name);
+            let instructions =
+              config.mode === "direct" ? client?.getInstructions() : undefined;
+            if (instructions) {
+              const secret = client ? this.secrets.get(client) : undefined;
+              if (secret)
+                instructions = instructions.split(secret).join("[redacted]");
+              instructions = instructions
+                .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, " ")
+                .slice(0, 4000);
+            }
             return {
               server: config.name,
               mode: config.mode ?? "legacy",
+              ...(instructions ? { instructions } : {}),
               tools: discovered
                 .filter((tool) =>
                   config.mode === "direct"
