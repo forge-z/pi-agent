@@ -9,6 +9,11 @@ export type CommandAccess =
 export class CommandError extends Error {}
 export const commandCatalog = [
   {
+    name: "chats",
+    usage: "/chats [new TÍTULO|ID]",
+    description: "Listar, criar ou selecionar conversas exclusivas do Telegram",
+  },
+  {
     name: "agents",
     usage: "/agents [id]",
     description: "Listar ou selecionar conversas existentes",
@@ -45,6 +50,9 @@ export const commandCatalog = [
     description: "Consultar os comandos disponíveis",
   },
 ] as const;
+export const webCommandCatalog = commandCatalog.filter(
+  (entry) => entry.name !== "chats",
+);
 export interface CommandResult {
   kind: "command";
   command: string;
@@ -95,14 +103,30 @@ export class Commands {
       : `telegram:${access.chat}:${access.user}:${requestId}`;
   }
   allowed(access: CommandAccess) {
-    return this.app.store.all<{ id: string; title: string }>(
+    const rows = this.app.store.all<{ id: string; title: string }>(
       access.source === "web"
-        ? "SELECT id,title FROM conversations WHERE id NOT IN (SELECT conversationId FROM conversation_lifecycle WHERE deletedAt IS NOT NULL) ORDER BY rowid DESC"
+        ? "SELECT id,title FROM conversations WHERE id NOT IN (SELECT conversationId FROM telegram_conversations) AND id NOT IN (SELECT conversationId FROM conversation_lifecycle WHERE deletedAt IS NOT NULL) ORDER BY rowid DESC"
         : "SELECT c.id,c.title FROM conversations c JOIN telegram_grants g ON g.conversationId=c.id WHERE g.chat=? AND g.user=? AND c.id NOT IN (SELECT conversationId FROM conversation_lifecycle WHERE deletedAt IS NOT NULL) ORDER BY c.rowid DESC",
       ...(access.source === "web" ? [] : [access.chat, access.user]),
     );
+    return rows.filter((row) => {
+      if (!this.app.telegramChats.dedicated(row.id)) return true;
+      if (
+        access.source !== "telegram" ||
+        !this.app.telegramChats.owns(row.id, access)
+      )
+        return false;
+      try {
+        this.app.telegramChats.binding(access);
+        return true;
+      } catch {
+        return false;
+      }
+    });
   }
   authorize(id: string, access: CommandAccess) {
+    if (access.source === "web" && this.app.telegramChats.dedicated(id))
+      throw new CommandError("Conversa exclusiva do Telegram.");
     if (!this.allowed(access).some((item) => item.id === id))
       throw new CommandError(
         "Conversa não autorizada. Vincule-a pela web com /link CODIGO.",
@@ -185,6 +209,10 @@ export class Commands {
   ): Promise<CommandResult> {
     this.authorize(id, access);
     const parsed = parseCommand(text)!;
+    if (parsed.name === "chats" && access.source !== "telegram")
+      throw new CommandError(
+        "Use /chats no Telegram para gerenciar suas conversas exclusivas.",
+      );
     const key = this.key(id, requestId, access);
     const existing = this.row(key);
     if (existing) {
@@ -281,6 +309,32 @@ export class Commands {
         // Recheck before writing a receipt or admitting any selection effect.
         this.authorize(parsed.argument, access);
       }
+      let chatTitle: string | undefined;
+      let chatTarget: string | undefined;
+      if (parsed.name === "chats") {
+        if (access.source !== "telegram")
+          throw new CommandError("Use /chats no Telegram.");
+        this.app.telegramChats.binding(access);
+        const newChat = /^new(?:\s+([\s\S]+))?$/.exec(parsed.argument);
+        if (newChat) {
+          chatTitle = newChat[1]?.trim() || "Conversa Telegram";
+          if (
+            chatTitle.length > 100 ||
+            /[\u0000-\u001f\u007f-\u009f]/.test(chatTitle)
+          )
+            throw new CommandError(
+              "Título inválido: use de 1 a 100 caracteres, sem quebras de linha.",
+            );
+        } else if (parsed.argument) {
+          if (!/^[1-9][0-9]{0,15}$/.test(parsed.argument))
+            throw new CommandError("Uso: /chats [new TÍTULO|ID]");
+          this.app.telegramChats.authorize(parsed.argument, access);
+          await this.app.conversation(parsed.argument);
+          this.app.telegramChats.authorize(parsed.argument, access);
+          chatTarget = parsed.argument;
+        }
+      }
+      let selection: string | undefined;
       this.app.store.run(
         "INSERT INTO command_receipts(key,conversationId,requestId,text,state) VALUES (?,?,?,?,'pending')",
         key,
@@ -296,13 +350,52 @@ export class Commands {
         } else
           switch (parsed.name) {
             case "help":
-              base.data = commandCatalog;
+              base.data =
+                access.source === "telegram"
+                  ? commandCatalog
+                  : webCommandCatalog;
               base.text =
-                commandCatalog
+                (access.source === "telegram"
+                  ? commandCatalog
+                  : webCommandCatalog
+                )
                   .map((entry) => `${entry.usage} — ${entry.description}`)
                   .join("\n") +
                 "\n//texto envia uma barra literal. /agents não cria agentes; /stop preserva os agendamentos futuros.";
               break;
+            case "chats": {
+              if (access.source !== "telegram")
+                throw new CommandError("Use /chats no Telegram.");
+              if (chatTitle)
+                chatTarget = await this.app.create(chatTitle, access);
+              if (chatTarget) {
+                this.app.assertHandoffAvailable(id);
+                this.app.telegramChats.authorize(chatTarget, access);
+                selection = chatTarget;
+                base.conversationId = chatTarget;
+              }
+              const conversations = this.app.telegramChats.list(access);
+              base.data = conversations;
+              const current =
+                chatTarget ??
+                this.app.store.get<{ conversationId: string }>(
+                  "SELECT conversationId FROM telegram_chat_selection WHERE chat=? AND user=?",
+                  access.chat,
+                  access.user,
+                )?.conversationId;
+              base.text =
+                (chatTarget
+                  ? `Conversa Telegram selecionada: ${chatTarget}.\n`
+                  : "Conversas Telegram:\n") +
+                (conversations
+                  .map(
+                    (c) =>
+                      `${c.id === current ? "→ " : ""}${c.id} · ${c.title}`,
+                  )
+                  .join("\n") || "Nenhuma conversa Telegram criada.") +
+                "\n/chats new TÍTULO cria uma conversa; /chats ID seleciona. O histórico antigo continua na web. As próximas mensagens usam contexto exclusivo do Telegram.";
+              break;
+            }
             case "agents": {
               const conversations = this.allowed(access);
               base.data = conversations;
@@ -311,12 +404,16 @@ export class Commands {
                   this.app.store.db.exec("SAVEPOINT agent_selection");
                   try {
                     this.authorize(parsed.argument, access);
-                    this.app.store.run(
-                      "UPDATE telegram SET conversationId=? WHERE chat=? AND user=?",
-                      parsed.argument,
-                      access.chat,
-                      access.user,
-                    );
+                    if (this.app.telegramChats.dedicated(parsed.argument)) {
+                      this.app.telegramChats.authorize(parsed.argument, access);
+                      selection = parsed.argument;
+                    } else
+                      this.app.store.run(
+                        "UPDATE telegram SET conversationId=? WHERE chat=? AND user=?",
+                        parsed.argument,
+                        access.chat,
+                        access.user,
+                      );
                     this.app.store.db.exec("RELEASE SAVEPOINT agent_selection");
                   } catch (error) {
                     this.app.store.db.exec(
@@ -398,6 +495,10 @@ export class Commands {
         // Reply and acknowledgement commit together, before HTTP acknowledgement.
         this.app.store.db.exec("BEGIN IMMEDIATE");
         try {
+          if (selection && access.source === "telegram") {
+            this.app.assertHandoffAvailable(id);
+            this.app.telegramChats.select(selection, access);
+          }
           this.app.store.run(
             "UPDATE command_receipts SET state='done',result=? WHERE key=?",
             JSON.stringify(base),
@@ -439,24 +540,29 @@ export class Commands {
     const serial =
       parsed.name === "model" ||
       parsed.name === "thinking" ||
-      parsed.name === "compact";
+      parsed.name === "compact" ||
+      parsed.name === "chats";
+    const serialKey =
+      parsed.name === "chats" && access.source === "telegram"
+        ? `chats:${access.chat}:${access.user}`
+        : id;
     this.inputs.set(key, { id, text });
     const work = (
       serial
-        ? (this.tails.get(id) ?? Promise.resolve()).catch(() => {})
+        ? (this.tails.get(serialKey) ?? Promise.resolve()).catch(() => {})
         : Promise.resolve()
     ).then(() =>
       parsed.name === "compact"
         ? this.app.withProviderAdmission(operation)
         : operation(),
     );
-    if (serial) this.tails.set(id, work);
+    if (serial) this.tails.set(serialKey, work);
     this.work.set(key, work);
     void work
       .finally(() => {
         this.work.delete(key);
         this.inputs.delete(key);
-        if (this.tails.get(id) === work) this.tails.delete(id);
+        if (this.tails.get(serialKey) === work) this.tails.delete(serialKey);
       })
       .catch(() => {});
     return work;

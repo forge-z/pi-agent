@@ -56,6 +56,8 @@ export class Store {
       CREATE TABLE IF NOT EXISTS links(code TEXT PRIMARY KEY, conversationId TEXT, expires INTEGER);
       CREATE TABLE IF NOT EXISTS telegram(chat TEXT PRIMARY KEY, conversationId TEXT, user TEXT);
       CREATE TABLE IF NOT EXISTS telegram_grants(chat TEXT, user TEXT, conversationId TEXT, PRIMARY KEY(chat,user,conversationId));
+      CREATE TABLE IF NOT EXISTS telegram_conversations(conversationId TEXT PRIMARY KEY,chat TEXT NOT NULL,user TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS telegram_chat_selection(chat TEXT,user TEXT,conversationId TEXT NOT NULL,PRIMARY KEY(chat,user));
       CREATE TABLE IF NOT EXISTS telegram_updates(id INTEGER PRIMARY KEY, fingerprint TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS command_receipts(key TEXT PRIMARY KEY, conversationId TEXT NOT NULL, requestId TEXT NOT NULL, text TEXT NOT NULL, state TEXT NOT NULL, result TEXT);
       CREATE UNIQUE INDEX IF NOT EXISTS command_request ON command_receipts(conversationId,requestId);
@@ -94,14 +96,20 @@ export class Store {
       OR json_extract(NEW.value,'$.userId') IS NOT n.user
       OR json_extract(NEW.value,'$.chatId') IS NOT n.chat
       ELSE 1 END`;
+    const grantRevoked = `n.chat=OLD.chat AND n.user=OLD.user AND
+      (n.conversationId=OLD.conversationId OR
+       (n.conversationId IN (SELECT conversationId FROM telegram_conversations WHERE chat=OLD.chat AND user=OLD.user)
+        AND EXISTS(SELECT 1 FROM telegram WHERE chat=OLD.chat AND user=OLD.user AND conversationId=OLD.conversationId)))`;
     this.db.exec(`
+      DROP TRIGGER IF EXISTS task_telegram_revoke;
+      DROP TRIGGER IF EXISTS task_telegram_regrant;
       CREATE TRIGGER IF NOT EXISTS task_telegram_unlink AFTER DELETE ON telegram BEGIN ${cancel("n.chat=OLD.chat")} END;
       CREATE TRIGGER IF NOT EXISTS task_telegram_remap AFTER UPDATE OF chat,user,conversationId ON telegram BEGIN ${cancel(mappingChanged)} END;
       CREATE TRIGGER IF NOT EXISTS task_telegram_replace AFTER INSERT ON telegram BEGIN ${cancel(routeChanged)} END;
-      CREATE TRIGGER IF NOT EXISTS task_telegram_revoke AFTER DELETE ON telegram_grants BEGIN ${cancel("n.chat=OLD.chat AND n.user=OLD.user AND n.conversationId=OLD.conversationId")} END;
+      CREATE TRIGGER IF NOT EXISTS task_telegram_revoke AFTER DELETE ON telegram_grants BEGIN ${cancel(grantRevoked)} END;
       CREATE TRIGGER IF NOT EXISTS task_telegram_regrant AFTER UPDATE ON telegram_grants
       WHEN OLD.chat IS NOT NEW.chat OR OLD.user IS NOT NEW.user OR OLD.conversationId IS NOT NEW.conversationId
-      BEGIN ${cancel("n.chat=OLD.chat AND n.user=OLD.user AND n.conversationId=OLD.conversationId")} END;
+      BEGIN ${cancel(grantRevoked)} END;
       CREATE TRIGGER IF NOT EXISTS task_telegram_connection_update AFTER UPDATE OF value ON meta WHEN NEW.key='telegram:connection' BEGIN ${cancel(configChanged)} END;
       CREATE TRIGGER IF NOT EXISTS task_telegram_connection_insert AFTER INSERT ON meta WHEN NEW.key='telegram:connection' BEGIN ${cancel(configChanged)} END;
       CREATE TRIGGER IF NOT EXISTS task_telegram_connection_delete AFTER DELETE ON meta WHEN OLD.key='telegram:connection' BEGIN ${cancel("1")} END;
@@ -196,6 +204,15 @@ export class Store {
     );
   }
   link(conversationId: string) {
+    if (
+      this.get(
+        "SELECT 1 FROM telegram_conversations WHERE conversationId=?",
+        conversationId,
+      )
+    )
+      throw new Error(
+        "Conversa exclusiva do Telegram. Selecione outra conversa na web para vincular.",
+      );
     if (this.conversationDeleted(conversationId))
       throw new Error("Conversa excluída");
     const code = randomBytes(16).toString("hex");
@@ -211,7 +228,7 @@ export class Store {
     this.db.exec("BEGIN IMMEDIATE");
     try {
       const link = this.get<{ conversationId: string }>(
-        "SELECT conversationId FROM links WHERE code=? AND expires>?",
+        "SELECT conversationId FROM links WHERE code=? AND expires>? AND conversationId NOT IN (SELECT conversationId FROM telegram_conversations)",
         hash(code),
         Date.now(),
       );
@@ -241,7 +258,7 @@ export class Store {
           "INSERT OR IGNORE INTO deliveries(id,chat,text) VALUES (?,?,?)",
           `link:${updateKey}`,
           chat,
-          "Conversa vinculada. O histórico é compartilhado com a web. Use /help para consultar os comandos.",
+          "Conversa vinculada. As próximas mensagens usarão uma conversa exclusiva do Telegram; o histórico antigo permanece na web. Use /chats para gerenciar as conversas.",
         );
         this.run(
           "INSERT OR IGNORE INTO delivery_conversations VALUES (?,?)",

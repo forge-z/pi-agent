@@ -28,9 +28,15 @@ function activeRoute(store: Store, conversationId: string): Route | undefined {
     const mapping = store.get(
       `SELECT 1 FROM telegram t JOIN telegram_grants g
        ON g.chat=t.chat AND g.user=t.user AND g.conversationId=t.conversationId
-       WHERE t.chat=? AND t.user=? AND t.conversationId=?`,
+       WHERE t.chat=? AND t.user=?
+       AND t.conversationId NOT IN (SELECT conversationId FROM conversation_lifecycle WHERE deletedAt IS NOT NULL)
+       AND ((t.conversationId=? AND NOT EXISTS (SELECT 1 FROM telegram_conversations WHERE conversationId=t.conversationId)) OR EXISTS (
+         SELECT 1 FROM telegram_conversations d JOIN telegram_grants own
+         ON own.conversationId=d.conversationId AND own.chat=d.chat AND own.user=d.user
+         WHERE d.conversationId=? AND d.chat=t.chat AND d.user=t.user))`,
       config.chatId,
       config.userId,
+      conversationId,
       conversationId,
     );
     if (!mapping) return;
@@ -135,7 +141,27 @@ export function taskTelegramAuthorized(
      WHERE p.deliveryId=?`,
     deliveryId,
   );
-  if (!receipt) return true;
+  if (!receipt) {
+    const dedicated =
+      owner &&
+      store.get<{ chat: string; user: string }>(
+        "SELECT chat,user FROM telegram_conversations WHERE conversationId=?",
+        owner.conversationId,
+      );
+    if (!dedicated) return true;
+    if (!users.includes(dedicated.user) || !chats.includes(dedicated.chat))
+      return false;
+    return !!store.get(
+      `SELECT 1 FROM telegram t JOIN telegram_grants anchor
+       ON anchor.chat=t.chat AND anchor.user=t.user AND anchor.conversationId=t.conversationId
+       JOIN telegram_grants own ON own.chat=t.chat AND own.user=t.user AND own.conversationId=?
+       WHERE t.chat=? AND t.user=? AND t.conversationId NOT IN
+       (SELECT conversationId FROM conversation_lifecycle WHERE deletedAt IS NOT NULL)`,
+      owner!.conversationId,
+      dedicated.chat,
+      dedicated.user,
+    );
+  }
   const route = activeRoute(store, receipt.conversationId);
   return (
     !!route &&

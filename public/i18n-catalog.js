@@ -85,6 +85,9 @@ globalThis.PiEnglish = {
   "Enter envia · Ctrl + Enter nova linha":
     "Enter to send · Ctrl + Enter for a new line",
   "Enviar mensagem": "Send message",
+  "Enviando…": "Sending…",
+  "Mensagem recebida. A atualização da tela falhou: {0}":
+    "Message received. The display refresh failed: {0}",
   "Enviar mensagem (Enter)": "Send message (Enter)",
   "Ideias para começar": "Ideas to get started",
   "Organizar meu dia": "Organize my day",
@@ -201,8 +204,8 @@ globalThis.PiEnglish = {
   "Acompanhe as execuções ativas nas suas conversas.":
     "Track active runs across your conversations.",
   "CONEXÃO DIRETA": "DIRECT CONNECTION",
-  "Configure o bot e escolha o usuário autorizado. A conversa selecionada será o destino das mensagens recebidas.":
-    "Set up the bot and choose the authorized user. The selected conversation will receive incoming messages.",
+  "Configure o bot e escolha o usuário autorizado. As mensagens usam conversas exclusivas do Telegram; o histórico antigo permanece na web.":
+    "Set up the bot and choose the authorized user. Messages use dedicated Telegram conversations; previous history stays on the web.",
   "Estado da conexão": "Connection status",
   Verificando: "Checking",
   "Destino configurado": "Configured destination",

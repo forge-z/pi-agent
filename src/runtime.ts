@@ -1,3 +1,4 @@
+import { TelegramChats, type TelegramOwner } from "./telegram-chats.js";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { createModels, type MutableModels } from "@earendil-works/pi-ai/models";
 import { openaiProvider } from "@earendil-works/pi-ai/providers/openai";
@@ -92,6 +93,7 @@ export class Runtime {
   readonly settings: Settings;
   readonly tasks: Tasks;
   readonly commands: Commands;
+  readonly telegramChats: TelegramChats;
   harness!: Harness;
   mcpCalls!: McpCalls;
   cuaHandoffs?: CuaHandoffs;
@@ -175,6 +177,7 @@ export class Runtime {
     }
     this.settings = new Settings(this);
     this.tasks = new Tasks(this);
+    this.telegramChats = new TelegramChats(this);
     this.commands = new Commands(this);
     if (options.gateway instanceof McpGateway) {
       this.mcpCalls = new McpCalls(this.store, options.gateway, (id) =>
@@ -430,9 +433,27 @@ export class Runtime {
         "SELECT * FROM requests WHERE status='pending' OR (source='system' AND status='deferred')",
       )) {
         if (app.store.conversationDeleted(row.conversationId)) continue;
+        const owner =
+          row.source === "telegram"
+            ? app.store.get<{ chat: string; user: string }>(
+                "SELECT chat,user FROM telegram_conversations WHERE conversationId=? AND chat=?",
+                row.conversationId,
+                row.chat,
+              )
+            : undefined;
+        let revoked = false;
+        if (owner) {
+          try {
+            app.telegramChats.authorize(row.conversationId, owner);
+          } catch (error) {
+            if (!(error instanceof CommandError)) throw error;
+            revoked = true;
+          }
+        }
         if (
           app.isConversationHeld(row.conversationId) ||
-          row.status === "deferred"
+          row.status === "deferred" ||
+          revoked
         ) {
           // Reattach only: never admit a previously unsent input while control is held.
           const receipt = await app.harness.commit(
@@ -443,6 +464,12 @@ export class Runtime {
               ),
             context,
           );
+          if (!receipt && revoked)
+            app.store.run(
+              "UPDATE requests SET status='revoked' WHERE conversationId=? AND requestId=? AND status='pending'",
+              row.conversationId,
+              row.requestId,
+            );
           if (receipt) {
             const submission = await app.harness.submission(
               receipt.id as SubmissionId,
@@ -462,6 +489,9 @@ export class Runtime {
             row.text,
             row.source,
             row.chat,
+            owner
+              ? () => app!.telegramChats.authorize(row.conversationId, owner)
+              : undefined,
           );
       }
       for (const action of app.store.all<Action>(
@@ -603,8 +633,12 @@ export class Runtime {
         this.registry.install(defineExtension({ ...extension, tools }));
     }
   }
-  async create(title = "Nova conversa") {
+  async create(title = "Nova conversa", telegramOwner?: TelegramOwner) {
     title = conversationTitle(title);
+    const anchor = telegramOwner
+      ? this.telegramChats.binding(telegramOwner)
+      : undefined;
+    if (anchor) this.assertHandoffAvailable(anchor);
     const defaults = this.settings.defaults();
     const conversation = await this.harness.createConversation(
       {
@@ -619,12 +653,39 @@ export class Runtime {
       },
       context,
     );
-    this.store.run(
-      "INSERT INTO conversations VALUES (?,?)",
-      String(conversation.id),
-      title,
-    );
-    return String(conversation.id);
+    const id = String(conversation.id);
+    if (telegramOwner)
+      this.store.run(
+        "INSERT INTO telegram_conversations VALUES (?,?,?)",
+        id,
+        telegramOwner.chat,
+        telegramOwner.user,
+      );
+    this.store.db.exec("SAVEPOINT create_conversation");
+    try {
+      if (telegramOwner) {
+        if (this.telegramChats.binding(telegramOwner) !== anchor)
+          throw new CommandError(
+            "Vínculo Telegram mudou durante a criação. Tente novamente.",
+          );
+        this.assertHandoffAvailable(anchor!);
+      }
+      this.store.run("INSERT INTO conversations VALUES (?,?)", id, title);
+      if (telegramOwner) {
+        this.store.run(
+          "INSERT INTO telegram_grants VALUES (?,?,?)",
+          telegramOwner.chat,
+          telegramOwner.user,
+          id,
+        );
+      }
+      this.store.db.exec("RELEASE SAVEPOINT create_conversation");
+    } catch (error) {
+      this.store.db.exec("ROLLBACK TO SAVEPOINT create_conversation");
+      this.store.db.exec("RELEASE SAVEPOINT create_conversation");
+      throw error;
+    }
+    return id;
   }
   async conversation(id: string) {
     this.assertConversationAvailable(id);
@@ -668,7 +729,7 @@ export class Runtime {
       title: string;
       deletedAt: number | null;
     }>(
-      `SELECT c.id,c.title,l.deletedAt FROM conversations c LEFT JOIN conversation_lifecycle l ON l.conversationId=c.id WHERE l.deletedAt IS ${deleted ? "NOT " : ""}NULL ORDER BY c.rowid DESC`,
+      `SELECT c.id,c.title,l.deletedAt FROM conversations c LEFT JOIN conversation_lifecycle l ON l.conversationId=c.id WHERE c.id NOT IN (SELECT conversationId FROM telegram_conversations) AND l.deletedAt IS ${deleted ? "NOT " : ""}NULL ORDER BY c.rowid DESC`,
     );
   }
   renameConversation(id: string, title: unknown) {
@@ -866,6 +927,10 @@ export class Runtime {
     access: CommandAccess,
   ) {
     this.assertHandoffAvailable(conversationId);
+    if (access.source === "web" && this.telegramChats.dedicated(conversationId))
+      throw new CommandError(
+        "Conversa exclusiva do Telegram. Use a interface web para suas conversas web.",
+      );
     if (
       access.source === "web" &&
       /^\/(link|start)(?:@[a-zA-Z0-9_]+)?(?:\s|$)/.test(text.trim())
@@ -894,6 +959,7 @@ export class Runtime {
         escaped,
         access.source,
         access.source === "telegram" ? access.chat : null,
+        () => this.commands.authorize(conversationId, access),
       )),
     };
   }
@@ -903,9 +969,10 @@ export class Runtime {
     text: string,
     source = "web",
     chat: string | null = null,
+    authorize?: () => void,
   ) {
     return this.withProviderAdmission(() =>
-      this.submitOnce(conversationId, requestId, text, source, chat),
+      this.submitOnce(conversationId, requestId, text, source, chat, authorize),
     );
   }
   async withProviderAdmission<T>(operation: () => Promise<T>): Promise<T> {
@@ -926,9 +993,12 @@ export class Runtime {
     text: string,
     source = "web",
     chat: string | null = null,
+    authorize?: () => void,
   ) {
     if (this.closing) throw new Error("Serviço encerrando");
     this.assertHandoffAvailable(conversationId);
+    if (source === "web" && this.telegramChats.dedicated(conversationId))
+      throw new CommandError("Conversa exclusiva do Telegram.");
     if (
       !/^[\w:.-]{1,160}$/.test(requestId) ||
       !text.trim() ||
@@ -954,6 +1024,22 @@ export class Runtime {
       );
     this.assertConversationAvailable(conversationId);
     this.assertHandoffAvailable(conversationId);
+    const prior = this.store.get<RequestRow>(
+      "SELECT * FROM requests WHERE conversationId=? AND requestId=?",
+      conversationId,
+      requestId,
+    );
+    if (
+      prior &&
+      (prior.text !== text || prior.source !== source || prior.chat !== chat)
+    )
+      throw new Error("requestId já utilizado com conteúdo diferente");
+    if (source === "web" || source === "telegram") {
+      await this.drainDeferredOutcomes(conversationId, conversation);
+      this.assertConversationAvailable(conversationId);
+      this.assertHandoffAvailable(conversationId);
+    }
+    authorize?.();
     this.store.run(
       "INSERT OR IGNORE INTO requests(conversationId,requestId,text,source,chat) VALUES (?,?,?,?,?)",
       conversationId,
@@ -973,11 +1059,6 @@ export class Runtime {
       existing.chat !== chat
     )
       throw new Error("requestId já utilizado com conteúdo diferente");
-    if (source === "web" || source === "telegram") {
-      await this.drainDeferredOutcomes(conversationId, conversation);
-      this.assertConversationAvailable(conversationId);
-      this.assertHandoffAvailable(conversationId);
-    }
     const submission = await conversation.submit(
       { type: "input", content: text, requestId, whenBusy: "followUp" },
       context,
@@ -1030,7 +1111,7 @@ export class Runtime {
                   .join("\n")
               : "";
           if (answer && chat) {
-            this.store.queueTelegram(key, chat, answer);
+            this.store.queueTelegram(key, chat, answer, 3500, conversationId);
           }
         }
         this.store.db.exec("SAVEPOINT request_settlement");

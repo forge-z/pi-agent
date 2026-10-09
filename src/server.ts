@@ -14,7 +14,7 @@ import { ProviderLogin } from "./provider-login.js";
 import type { Telegram, TelegramUpdate } from "./telegram.js";
 import { TaskError } from "./tasks.js";
 import { SettingsError } from "./settings.js";
-import { commandCatalog, CommandError } from "./commands.js";
+import { webCommandCatalog, CommandError } from "./commands.js";
 import { PolicyError, McpError } from "./mcp.js";
 import { CuaHandoffError } from "./cua-handoffs.js";
 import {
@@ -416,7 +416,7 @@ export function createAppServer(app: Runtime, options: ServerOptions) {
           return json(response, 200, call);
         }
         if (path === "/api/commands" && method === "GET")
-          return json(response, 200, { commands: commandCatalog });
+          return json(response, 200, { commands: webCommandCatalog });
         if (path === "/api/commands/tasks" && method === "GET")
           return json(
             response,
@@ -482,6 +482,7 @@ export function createAppServer(app: Runtime, options: ServerOptions) {
             );
           }
           if (resource === "link" && method === "POST") {
+            app.commands.authorize(id, { source: "web" });
             const code = app.store.link(id);
             return json(response, 201, {
               code,

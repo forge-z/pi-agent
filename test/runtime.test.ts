@@ -273,7 +273,10 @@ test("Telegram allowlist, one-use linking, duplicate updates and uncertain send 
       tg.receive(update(3, "Hello")),
     ]);
     assert.deepEqual(replies[0], replies[1]);
-    await wait(app, id);
+    const telegramId = (replies[0] as { conversationId: string })
+      .conversationId;
+    assert.notEqual(telegramId, id);
+    await wait(app, telegramId);
     await tg.flush();
     await tg.flush();
     assert.equal(sends, 2); // One pairing acknowledgement and one model reply.
@@ -288,8 +291,9 @@ test("Telegram allowlist, one-use linking, duplicate updates and uncertain send 
     await tg.flush();
     assert.equal(sends, 2);
     assert.equal(
-      (await app.snapshot(id)).view.entries.filter((e) => e.kind === "pi.user")
-        .length,
+      (await app.snapshot(telegramId)).view.entries.filter(
+        (e) => e.kind === "pi.user",
+      ).length,
       1,
     );
   } finally {
