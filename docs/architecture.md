@@ -23,6 +23,8 @@ Node.js 24 ou superior executa o servidor HTTP, a interface estática e o runtim
 
 O serviço adquire um `proper-lockfile` em `DATA_DIR/owner.lock` (diretório de lease) dentro do volume de dados antes de abrir e recuperar as bases: heartbeat de 10 s, lock considerado obsoleto após 30 s e nenhuma espera para outra instância. Rode apenas um owner por diretório/volume. No início, ações que ficaram em `running` e entregas que ficaram em `sending` são marcadas `uncertain`; não são repetidas automaticamente. Requisições ainda `pending` são retomadas. A recuperação percorre todas as conversas em páginas de 1.000 registros.
 
+O renderer web preserva Markdown em respostas com pontuação comum, URLs, tabelas e código. Antes do parser, limita o texto a 32768 caracteres e conta delimitadores de Markdown: no máximo 512 no total e 256 em cada classe de ênfase, crases e marcadores de lista. A contagem inclui código literal para não confundir contextos de HTML, links ou tabelas com trechos seguros. Depois do parser, o limite de 1500 objetos restringe a árvore de tokens. Conteúdo que excede esses limites aparece como prévia de texto; texto extenso mantém a opção de baixar o conteúdo completo. O histórico truncado e o texto parcial usam o mesmo renderer, que cria DOM inerte sem interpretar HTML da resposta.
+
 ## Login e provider
 
 O login web usa `WEB_PASSWORD` ou `WEB_PASSWORD_FILE` (mínimo de 12 caracteres), limite de tentativas e cookie `HttpOnly`, `SameSite=Strict`, com duração de 24 horas. Requisições de escrita devem trazer a origem exata configurada em `APP_ORIGIN`; `COOKIE_SECURE=true` adiciona o atributo Secure para uso atrás de TLS.

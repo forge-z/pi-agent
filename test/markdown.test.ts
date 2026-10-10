@@ -135,6 +135,114 @@ test("allows safe HTTP, HTTPS, and mailto links", () => {
   );
 });
 
+const richAnswer =
+  "## Guia de configuração\n\n" +
+  Array.from(
+    { length: 24 },
+    (_, i) =>
+      `**Passo ${i + 1}.** Leia [a referência](https://example.invalid/docs/api/v1?mode=test&item=${i}#section). Use \`settings.items[${i}] = { enabled: true };\` e confira o resultado.`,
+  ).join("\n\n");
+
+test("ordinary rich answers keep headings, emphasis and URLs beyond 256 punctuation marks", () => {
+  assert.ok((richAnswer.match(/[!-\/:-@\[-\x60{-~]/g) || []).length > 256);
+  const fragment = renderMarkdown(richAnswer, testDocument);
+  assert.ok(find(fragment, "h2"));
+  assert.equal(findAll(fragment, "strong").length, 24);
+  assert.equal(findAll(fragment, "a").length, 24);
+  assert.equal(findAll(fragment, "code").length, 24);
+  assert.equal(find(fragment, "pre"), undefined);
+});
+
+test("synthetic answers matching measured Safari lengths and punctuation retain formatting", () => {
+  // Only aggregate measurements came from the real browser. No private
+  // conversation content or identifying data is needed to reproduce it.
+  for (const [length, punctuation] of [
+    [2864, 307],
+    [2083, 195],
+    [733, 53],
+  ]) {
+    const prefix =
+      "## Resposta\n\n**Resumo:** consulte [a referência](https://example.invalid/api?item=1&mode=test). Use `settings.items[0] = { enabled: true };`.\n\n";
+    const count = (value: string) =>
+      (value.match(/[!-\/:-@\[-\x60{-~]/g) || []).length;
+    const prose = "valor, ".repeat(punctuation - count(prefix));
+    const source = (prefix + prose).padEnd(length, "a");
+    assert.equal(source.length, length);
+    assert.equal(count(source), punctuation);
+    const fragment = renderMarkdown(source, testDocument);
+    assert.ok(find(fragment, "h2"));
+    assert.ok(find(fragment, "strong"));
+    assert.ok(find(fragment, "a"));
+    assert.ok(find(fragment, "code"));
+    assert.equal(find(fragment, "pre"), undefined);
+  }
+});
+
+test("punctuation inside fenced code does not turn the surrounding answer into plain text", () => {
+  const code = Array.from(
+    { length: 30 },
+    (_, i) =>
+      `const item${i} = { url: 'https://example.invalid/a?b=c', flags: [true, false], run: (x) => x?.value ?? 0 };`,
+  ).join("\n");
+  const source = `# Exemplo\n\n\`\`\`js\n${code}\n\`\`\`\n\n**Pronto.**`;
+  const fragment = renderMarkdown(source, testDocument);
+  assert.ok(find(fragment, "h1"));
+  assert.ok(find(fragment, "strong"));
+  assert.equal(find(fragment, "pre")?.children[0].nodeName, "code");
+  assert.equal(find(fragment, "code")?.textContent, code);
+});
+
+test("ordinary inline function calls after links retain formatting", () => {
+  const source =
+    "## Guia\n\n" +
+    Array.from(
+      { length: 24 },
+      (_, i) =>
+        `**Passo ${i}.** [referência](https://example.invalid/#section). Use \`settings.items[${i}].run({ enabled: true });\`.`,
+    ).join("\n\n");
+  const fragment = renderMarkdown(source, testDocument);
+  assert.ok(find(fragment, "h2"));
+  assert.equal(findAll(fragment, "code").length, 24);
+  assert.equal(findAll(fragment, "a").length, 24);
+  assert.equal(find(fragment, "pre"), undefined);
+});
+
+test("ordinary prose punctuation and table separators are not a Markdown complexity limit", () => {
+  const source =
+    "## Valores\n\n" +
+    "Valor: 1.234,56; porcentagem: 50%; correto! ".repeat(45) +
+    "\n\n| Nome | Valor | Estado |\n| --- | ---: | --- |\n" +
+    Array.from(
+      { length: 18 },
+      (_, i) => `| item-${i} | ${i}.5 | **ok** |`,
+    ).join("\n");
+  const fragment = renderMarkdown(source, testDocument);
+  assert.ok(find(fragment, "h2"));
+  assert.ok(find(fragment, "table"));
+  assert.equal(findAll(fragment, "strong").length, 18);
+  assert.equal(find(fragment, "pre"), undefined);
+});
+
+test("streaming rich answers do not lose existing formatting when punctuation crosses 256", () => {
+  for (let end = 200; end <= richAnswer.length; end += 137) {
+    const fragment = renderMarkdown(richAnswer.slice(0, end), testDocument);
+    assert.ok(find(fragment, "h2"), `prefix ${end}`);
+    assert.ok(find(fragment, "strong"), `prefix ${end}`);
+    assert.equal(find(fragment, "pre"), undefined, `prefix ${end}`);
+  }
+});
+
+test("a 4096-character history preview keeps safe formatting and an incomplete final construct readable", () => {
+  const preview = (
+    richAnswer + "\n\n[Next reference](https://example.invalid/long/"
+  ).slice(0, 4096);
+  const fragment = renderMarkdown(preview, testDocument);
+  assert.ok(find(fragment, "h2"));
+  assert.ok(find(fragment, "strong"));
+  assert.ok(fragment.textContent.includes("Guia de configuração"));
+  assert.equal(find(fragment, "pre"), undefined);
+});
+
 function tags(root: TestNode): string[] {
   return [root.nodeName, ...root.children.flatMap(tags)].filter(
     (tag) => tag !== "#text",
@@ -208,6 +316,7 @@ test("dense list markers also bypass parsing before nested list work blocks inpu
     "- ".repeat(16375) + "x",
     "+ ".repeat(16000) + "x",
     "1. ".repeat(10000) + "x",
+    "1) ".repeat(10000) + "x",
   ]) {
     const fragment = runInNewContext(
       `${rendererSource}\nrenderMarkdown(source, testDocument)`,
@@ -215,5 +324,65 @@ test("dense list markers also bypass parsing before nested list work blocks inpu
       { timeout: 250 },
     ) as TestNode;
     assert.equal(find(fragment, "pre")?.textContent, source);
+  }
+});
+
+test("both ordered-list delimiters stop at 256 markers before invoking the lexer", () => {
+  let calls = 0;
+  const render = runInNewContext(`${rendererSource}\nrenderMarkdown`, {
+    lexer: () => {
+      calls++;
+      return [];
+    },
+    URL,
+  }) as typeof renderMarkdown;
+  for (const delimiter of [".", ")"]) {
+    const source = `1${delimiter} `.repeat(257) + "x";
+    assert.equal(
+      find(render(source, testDocument), "pre")?.textContent,
+      source,
+    );
+  }
+  assert.equal(calls, 0);
+});
+
+test("ambiguous code delimiters cannot hide expensive Markdown from the preflight", () => {
+  for (const source of [
+    "```js\nsafe\n```~~~\n" + "**a ".repeat(8000),
+    "\\`" + "**a ".repeat(8000) + "`",
+    "<div>\n```\n\n" + "**a ".repeat(8000),
+    "~~~\nsafe\n~~~\r" + "**a ".repeat(8000),
+    "- text\n\n  ```\n\n" + "**a ".repeat(8000),
+    "a | b\n--- | ---\n`foo | " + "**a ".repeat(8000) + "`",
+    '<span title="`"> ' + "**a ".repeat(8000) + "`",
+    "https://example.invalid/` " + "**a ".repeat(8000) + "`",
+    '[x](https://example.invalid "foo `") ' + "**a ".repeat(8000) + "`",
+    '[x](https://example.invalid " ) `") ' + "**a ".repeat(8000) + "`",
+    "[x](https://example.invalid (foo `)) " + "**a ".repeat(8000) + "`",
+    '[x](https://example.invalid "title\n `foo") ' + "**a ".repeat(8000) + "`",
+  ]) {
+    const fragment = runInNewContext(
+      `${rendererSource}\nrenderMarkdown(source, testDocument)`,
+      { lexer, URL, source, testDocument },
+      { timeout: 250 },
+    ) as TestNode;
+    assert.equal(find(fragment, "pre")?.textContent, source);
+  }
+});
+
+test("inputs near the syntax budgets finish within the pre-parser regression deadline", () => {
+  for (const source of [
+    "**a ".repeat(128) + "`".repeat(256) + "text ".repeat(6300),
+    "- ".repeat(256) + "x".repeat(32000),
+    "[x](https://example.invalid/a) ".repeat(127) + "x".repeat(28000),
+  ]) {
+    assert.ok(source.length <= 32768);
+    const fragment = runInNewContext(
+      `${rendererSource}\nrenderMarkdown(source, testDocument)`,
+      { lexer, URL, source, testDocument },
+      { timeout: 250 },
+    ) as TestNode;
+    assert.ok(fragment.textContent.length > 0);
+    assert.equal(find(fragment, "script"), undefined);
   }
 });

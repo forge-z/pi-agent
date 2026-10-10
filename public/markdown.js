@@ -18,18 +18,7 @@ export function renderMarkdown(source, doc = document) {
   // A small string can still make the lexer spend seconds backtracking on
   // unbalanced emphasis. Bound syntax BEFORE parsing; counting tokens after
   // lexer() returns cannot protect clicks or the message submission handler.
-  let syntax = 0;
-  for (const character of text) {
-    const code = character.charCodeAt(0);
-    // Include all ASCII punctuation, including list markers (-, +, .),
-    // autolinks and escapes, rather than only emphasis delimiters.
-    const punctuation =
-      (code >= 33 && code <= 47) ||
-      (code >= 58 && code <= 64) ||
-      (code >= 91 && code <= 96) ||
-      (code >= 123 && code <= 126);
-    if (punctuation && ++syntax > 256) return renderTextPreview(text, doc);
-  }
+  if (hasExcessiveSyntax(text)) return renderTextPreview(text, doc);
   try {
     const tokens = lexer(text);
     const pending = [tokens];
@@ -50,6 +39,47 @@ export function renderMarkdown(source, doc = document) {
     return renderTextPreview(text, doc);
   }
   return fragment;
+}
+
+// Bound parser work without trying to duplicate Markdown's block/inline grammar.
+// Ordinary prose, URL separators and JSON punctuation are not recursive syntax.
+// Literal code is counted too: exemption heuristics can hide dangerous prose
+// when Marked consumes a delimiter as part of an HTML token, link or table cell.
+function hasExcessiveSyntax(text) {
+  let syntax = 0;
+  let emphasis = 0;
+  let backticks = 0;
+  let listMarkers = 0;
+  for (let index = 0; index < text.length; index++) {
+    const character = text[index];
+    let listMarker =
+      (character === "-" || character === "+") &&
+      (index === 0 || /\s/.test(text[index - 1])) &&
+      /\s/.test(text[index + 1] || "");
+    if (
+      (character === "." || character === ")") &&
+      /\s/.test(text[index + 1] || "")
+    ) {
+      let start = index - 1;
+      while (start >= 0 && index - start <= 9 && /[0-9]/.test(text[start]))
+        start--;
+      listMarker = start < index - 1 && (start < 0 || /\s/.test(text[start]));
+    }
+    if (listMarker) {
+      syntax++;
+      if (++listMarkers > 256) return true;
+    } else if ("*_~".includes(character)) {
+      syntax++;
+      if (++emphasis > 256) return true;
+    } else if (character === "`") {
+      syntax++;
+      if (++backticks > 256) return true;
+    } else if ("[]()<>!\\#".includes(character)) {
+      syntax++;
+    }
+    if (syntax > 512) return true;
+  }
+  return false;
 }
 
 export function renderTextPreview(source, doc = document) {
