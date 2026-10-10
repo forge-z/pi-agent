@@ -1,4 +1,8 @@
 import {
+  TelegramTyping,
+  type TelegramTypingOptions,
+} from "./telegram-typing.js";
+import {
   ConversationBusyError,
   ConversationError,
   type Runtime,
@@ -28,12 +32,14 @@ export interface TelegramUpdate {
   update_id: number;
   message?: {
     message_id: number;
+    message_thread_id?: number;
     text?: string;
     from?: { id: number; is_bot?: boolean; language_code?: string };
     chat: { id: number; type: string };
   };
 }
 export interface TelegramTransport {
+  typing?(chat: string, options?: TelegramTypingOptions): Promise<unknown>;
   send(
     chat: string,
     text: string,
@@ -43,6 +49,34 @@ export interface TelegramTransport {
 export class TelegramInputError extends Error {}
 export class TelegramHttp implements TelegramTransport {
   constructor(private token: string) {}
+  async typing(chat: string, options: TelegramTypingOptions = {}) {
+    try {
+      const response = await fetch(
+        `https://api.telegram.org/bot${this.token}/sendChatAction`,
+        {
+          method: "POST",
+          redirect: "error",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            chat_id: chat,
+            action: "typing",
+            ...(options.messageThreadId === undefined
+              ? {}
+              : { message_thread_id: options.messageThreadId }),
+          }),
+          signal: AbortSignal.any([
+            AbortSignal.timeout(2000),
+            ...(options.signal ? [options.signal] : []),
+          ]),
+        },
+      );
+      const result = (await response.json()) as { ok?: boolean };
+      if (!response.ok || result.ok !== true) throw new Error();
+      return result;
+    } catch {
+      throw new Error("Falha no indicador Telegram");
+    }
+  }
   async send(chat: string, text: string, options?: { parseMode?: "HTML" }) {
     const response = await fetch(
       `https://api.telegram.org/bot${this.token}/sendMessage`,
@@ -65,6 +99,7 @@ export class TelegramHttp implements TelegramTransport {
 }
 export class Telegram {
   private closing = false;
+  private typing: TelegramTyping;
   private flushWork: Promise<void> | undefined;
   private receives = new Map<number, Promise<unknown>>();
   private credentialBinding: string;
@@ -77,6 +112,7 @@ export class Telegram {
     private privateDm = false,
     private botId?: number,
   ) {
+    this.typing = new TelegramTyping(transport.typing?.bind(transport));
     const credential = this.app.store.get<{ value: string }>(
       "SELECT value FROM credentials WHERE provider='telegram:bot'",
     );
@@ -188,6 +224,7 @@ export class Telegram {
     }
   }
   async receive(update: TelegramUpdate, signal?: AbortSignal) {
+    if (this.closing || signal?.aborted) return { ignored: true };
     const message = update.message;
     if (
       !Number.isSafeInteger(update.update_id) ||
@@ -233,6 +270,50 @@ export class Telegram {
       );
     const inFlight = this.receives.get(update.update_id);
     if (inFlight) return inFlight;
+    const tracked = {
+      conversationId: undefined as string | undefined,
+      accepting: true,
+      normal: false,
+    };
+    const stopTyping = this.app.store.get(
+      "SELECT 1 FROM meta WHERE key=?",
+      `telegram:update:${update.update_id}`,
+    )
+      ? () => {}
+      : this.typing.start(
+          update.update_id,
+          chat,
+          () => {
+            if (this.closing || signal?.aborted) return false;
+            if (this.privateDm && !this.controlRoute({ chat, user }))
+              return false;
+            this.app.telegramChats.binding({ chat, user });
+            const selected = this.app.telegramChats.selected({ chat, user });
+            const id =
+              tracked.conversationId ?? selected ?? linked?.conversationId;
+            if (!id || (tracked.conversationId && selected && selected !== id))
+              return false;
+            this.app.commands.authorize(id, { source: "telegram", chat, user });
+            this.app.assertHandoffAvailable(id);
+            if (tracked.accepting) return true;
+            return (
+              tracked.normal &&
+              this.app.store.get<{ status: string }>(
+                "SELECT status FROM requests WHERE conversationId=? AND requestId=? AND source='telegram' AND chat=?",
+                id,
+                `telegram:${update.update_id}`,
+                chat,
+              )?.status === "pending"
+            );
+          },
+          {
+            signal,
+            ...(Number.isSafeInteger(message.message_thread_id) &&
+            message.message_thread_id! > 0
+              ? { messageThreadId: message.message_thread_id }
+              : {}),
+          },
+        );
     const operation = this.accept(
       update,
       user,
@@ -240,6 +321,23 @@ export class Telegram {
       fingerprint,
       text,
       signal,
+      tracked,
+    ).then(
+      (response) => {
+        tracked.accepting = false;
+        tracked.normal =
+          !!response &&
+          typeof response === "object" &&
+          "kind" in response &&
+          response.kind === "message";
+        if (!tracked.normal) stopTyping();
+        else this.typing.check();
+        return response;
+      },
+      (error) => {
+        stopTyping();
+        throw error;
+      },
     );
     this.receives.set(update.update_id, operation);
     void operation
@@ -254,6 +352,7 @@ export class Telegram {
     fingerprint: string,
     text: string,
     signal?: AbortSignal,
+    tracked?: { conversationId?: string },
   ) {
     // Re-delivered commands reuse the update key; never consume a link or approve twice.
     const commandKey = `telegram:update:${update.update_id}`;
@@ -415,6 +514,7 @@ export class Telegram {
           user,
         });
       }
+      if (tracked) tracked.conversationId = conversationId;
       const decision = /^\/(approve|deny)\s+([a-f0-9]{24})$/.exec(text);
       if (decision) {
         if (
@@ -511,13 +611,18 @@ export class Telegram {
   }
   async drain() {
     this.closing = true;
+    this.typing.close();
     await Promise.allSettled(this.receives.values());
     await this.flushWork;
   }
   setDmChat(chat: string) {
-    if (this.privateDm) this.chats = [chat];
+    if (this.privateDm) {
+      if (!this.chats.includes(chat)) this.typing.close();
+      this.chats = [chat];
+    }
   }
   private async sendPending() {
+    this.typing.check();
     for (const delivery of this.app.store.all<Delivery>(
       "SELECT * FROM deliveries WHERE state='pending' ORDER BY rowid",
     )) {

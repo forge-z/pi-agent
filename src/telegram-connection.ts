@@ -19,6 +19,7 @@ type Method =
   | "getUpdates"
   | "deleteWebhook"
   | "sendMessage"
+  | "sendChatAction"
   | "getMyCommands"
   | "setMyCommands";
 export interface TelegramApi {
@@ -569,6 +570,21 @@ export class TelegramConnection {
         const engine = new Telegram(
           this.app,
           {
+            typing: (chat, options) =>
+              api.call(
+                "sendChatAction",
+                {
+                  chat_id: chat,
+                  action: "typing",
+                  ...(options?.messageThreadId === undefined
+                    ? {}
+                    : { message_thread_id: options.messageThreadId }),
+                },
+                AbortSignal.any([
+                  signal,
+                  ...(options?.signal ? [options.signal] : []),
+                ]),
+              ),
             send: (chat, text, options) =>
               api.call(
                 "sendMessage",
@@ -637,6 +653,9 @@ export class TelegramConnection {
         }
       } catch (error) {
         if (signal.aborted) return;
+        // Retire the old engine before retry backoff so its ephemeral status
+        // cannot continue while the connection is unavailable.
+        await this.engine?.drain();
         if (
           error instanceof TelegramSetupError ||
           (error instanceof TelegramApiError &&
