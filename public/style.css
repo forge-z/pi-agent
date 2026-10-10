@@ -1334,6 +1334,7 @@ main {
   border-radius: 9px;
   background: var(--soft);
   color: var(--ink);
+  font-size: 0.875rem;
   line-height: 1.55;
 }
 .message-body pre code {
@@ -1342,7 +1343,7 @@ main {
   border: 0;
   border-radius: 0;
   background: transparent;
-  font-size: 0.88em;
+  font-size: inherit;
   white-space: pre;
 }
 .speaker {
@@ -1619,6 +1620,20 @@ dialog .fine {
   position: absolute;
   top: 14px;
   right: 14px;
+}
+.settings-dismiss {
+  position: sticky;
+  top: 14px;
+  z-index: 1;
+  height: 0;
+}
+.settings-dismiss .dialog-close {
+  top: 0;
+  right: 0;
+  background: var(--card);
+}
+.settings-dismiss .dialog-close:hover {
+  background: var(--hover);
 }
 .command-results-dialog,
 .command-tasks-dialog {
@@ -2167,6 +2182,10 @@ dialog .fine {
   .sidebar .appearance-row {
     padding-top: 16px;
     padding-bottom: 16px;
+  }
+  .sidebar .search-field input,
+  .sidebar-view-toggle {
+    min-height: 44px;
   }
   .theme-switch button {
     min-height: 40px;
